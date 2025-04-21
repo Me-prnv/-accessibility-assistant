@@ -13,6 +13,22 @@ export interface UserProfile {
   isOnboarded: boolean;
   authProvider: 'email' | 'google' | 'apple' | 'microsoft';
   profilePicture?: string;
+  activeAccessibilityProfileId?: string; // Added to track the active accessibility profile
+}
+
+// User accessibility profile schema for multiple profiles per user
+export interface UserAccessibilityProfile {
+  id: string;
+  userId: string;
+  name: string;
+  description?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  isDefault: boolean;
+  disabilityTypes: DisabilityType[];
+  iconName?: string;
+  color?: string;
+  settings: AccessibilitySettings;
 }
 
 // Disability types supported
@@ -276,7 +292,8 @@ export interface SchemaVersion {
 
 // Export the entire database schema
 export interface DatabaseSchema {
-  users: UserProfile[];
+  users: UserProfile[]; 
+  accessibilityProfiles: UserAccessibilityProfile[]; // Added to include accessibility profiles
   settings: AccessibilitySettings[];
   devices: UserDevice[];
   usage: UsageStatistics[];
@@ -288,4 +305,4 @@ export interface DatabaseSchema {
   trainingData: AITrainingData[];
   mlModels: MLModel[];
   schemaVersion: SchemaVersion[];
-} 
+}

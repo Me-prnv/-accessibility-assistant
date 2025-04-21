@@ -1,790 +1,777 @@
 // Screen Reader Module for Accessibility Assistant
-// Enhances existing screen readers and provides advanced reading capabilities
+// Provides screen reading functionality and enhanced text-to-speech
 
-// Types
-interface ScreenReaderSettings {
-  highlightReadText: boolean;
-  autoDescribeImages: boolean;
-  readingSpeed: number;
-  enhanceHeadings: boolean;
-  enhanceLinks: boolean;
-  enhanceForms: boolean;
-}
+import { VisualSettings, ScreenReaderElement } from '../../types';
 
 // Default settings
-const defaultSettings: ScreenReaderSettings = {
-  highlightReadText: true,
-  autoDescribeImages: true,
-  readingSpeed: 1,
-  enhanceHeadings: true,
-  enhanceLinks: true,
-  enhanceForms: true
+const defaultSettings: Partial<VisualSettings> = {
+  screenReaderEnabled: false,
+  readingGuideEnabled: false
 };
 
 // Initialize screen reader
-export function createScreenReader(options: Partial<ScreenReaderSettings> = {}) {
+export function createScreenReader(options: Partial<VisualSettings> = {}) {
   // Merge default settings with provided options
-  const settings: ScreenReaderSettings = {
+  const settings: Partial<VisualSettings> = {
     ...defaultSettings,
     ...options
   };
   
-  // State
-  let isReading = false;
-  let currentUtterance: SpeechSynthesisUtterance | null = null;
-  let currentHighlightedElement: HTMLElement | null = null;
-  let currentReadingIndex = 0;
-  let readingQueue: Element[] = [];
+  // UI elements
+  let controlPanel: HTMLElement | null = null;
+  let readerOverlay: HTMLElement | null = null;
   
-  // Create UI elements
-  const highlightOverlay = settings.highlightReadText ? createHighlightOverlay() : null;
-  const controlBar = createControlBar();
+  // State
+  let isActive = false;
+  let currentSpeech: SpeechSynthesisUtterance | null = null;
+  let elements: ScreenReaderElement[] = [];
+  let currentElementIndex = -1;
+  let voices: SpeechSynthesisVoice[] = [];
+  let selectedVoice: SpeechSynthesisVoice | null = null;
+  let rate = 1.0;
+  let pitch = 1.0;
+  let volume = 1.0;
+  
+  // Event handlers
+  let keyboardHandler: ((e: KeyboardEvent) => void) | null = null;
   
   // Initialize
   function initialize() {
-    // Enhance page accessibility
-    if (settings.enhanceHeadings) enhanceHeadingElements();
-    if (settings.enhanceLinks) enhanceLinkElements();
-    if (settings.enhanceForms) enhanceFormElements();
-    if (settings.autoDescribeImages) enhanceImageElements();
+    // Create UI elements
+    createUI();
+    
+    // Load settings from storage
+    loadSettings();
     
     // Set up event listeners
-    setupKeyboardControls();
-    
-    // Set up event listeners for speech synthesis
-    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+    setupEventListeners();
     
     // Load available voices
     loadVoices();
+  }
+  
+  // Load settings from Chrome storage
+  function loadSettings() {
+    chrome.storage.sync.get('screenReader', (data) => {
+      if (data.screenReader) {
+        Object.assign(settings, data.screenReader);
+        updateControlPanel();
+      }
+    });
+  }
+  
+  // Save settings to Chrome storage
+  function saveSettings() {
+    chrome.storage.sync.set({
+      screenReader: settings
+    });
+  }
+  
+  // Load available speech synthesis voices
+  function loadVoices() {
+    // Get available voices
+    voices = window.speechSynthesis.getVoices();
     
-    // Add event listener for automatic image descriptions
-    if (settings.autoDescribeImages) {
-      document.addEventListener('mouseover', handleImageHover);
+    // If voices aren't loaded yet, wait for them
+    if (voices.length === 0) {
+      window.speechSynthesis.onvoiceschanged = () => {
+        voices = window.speechSynthesis.getVoices();
+        // Set default voice (prefer English)
+        selectedVoice = voices.find(voice => voice.lang.startsWith('en')) || voices[0];
+        updateVoiceSelector();
+      };
+    } else {
+      // Set default voice (prefer English)
+      selectedVoice = voices.find(voice => voice.lang.startsWith('en')) || voices[0];
+      updateVoiceSelector();
     }
   }
   
-  // Create highlight overlay for text being read
-  function createHighlightOverlay() {
-    const overlay = document.createElement('div');
-    overlay.id = 'accessibility-assistant-highlight-overlay';
-    overlay.style.position = 'absolute';
-    overlay.style.backgroundColor = 'rgba(255, 255, 0, 0.3)';
-    overlay.style.border = '1px solid rgba(255, 200, 0, 0.5)';
-    overlay.style.borderRadius = '2px';
-    overlay.style.zIndex = '9999';
-    overlay.style.pointerEvents = 'none';
-    overlay.style.display = 'none';
-    document.body.appendChild(overlay);
-    
-    return overlay;
+  // Create UI elements
+  function createUI() {
+    createControlPanel();
   }
   
-  // Create control bar for screen reader
-  function createControlBar() {
-    const bar = document.createElement('div');
-    bar.id = 'accessibility-assistant-reader-controls';
-    bar.style.position = 'fixed';
-    bar.style.bottom = '10px';
-    bar.style.left = '50%';
-    bar.style.transform = 'translateX(-50%)';
-    bar.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-    bar.style.color = 'white';
-    bar.style.padding = '10px';
-    bar.style.borderRadius = '5px';
-    bar.style.zIndex = '10000';
-    bar.style.display = 'none';
-    bar.style.boxShadow = '0 2px 5px rgba(0, 0, 0, 0.2)';
+  // Create control panel UI
+  function createControlPanel() {
+    controlPanel = document.createElement('div');
+    controlPanel.id = 'accessibility-assistant-screen-reader-panel';
+    controlPanel.style.position = 'fixed';
+    controlPanel.style.bottom = '20px';
+    controlPanel.style.left = '50%';
+    controlPanel.style.transform = 'translateX(-50%)';
+    controlPanel.style.width = '400px';
+    controlPanel.style.backgroundColor = 'white';
+    controlPanel.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.2)';
+    controlPanel.style.borderRadius = '8px';
+    controlPanel.style.padding = '15px';
+    controlPanel.style.zIndex = '10000';
+    controlPanel.style.display = 'none';
     
-    // Add controls
-    bar.innerHTML = `
-      <div style="display: flex; align-items: center; justify-content: center; gap: 10px;">
-        <button id="accessibility-assistant-reader-prev" style="background: none; border: 1px solid #ccc; color: white; padding: 5px 10px; cursor: pointer; border-radius: 3px;" title="Previous element">◀</button>
-        <button id="accessibility-assistant-reader-play" style="background: none; border: 1px solid #ccc; color: white; padding: 5px 10px; cursor: pointer; border-radius: 3px;" title="Play/Pause">▶</button>
-        <button id="accessibility-assistant-reader-next" style="background: none; border: 1px solid #ccc; color: white; padding: 5px 10px; cursor: pointer; border-radius: 3px;" title="Next element">▶</button>
-        <button id="accessibility-assistant-reader-stop" style="background: none; border: 1px solid #ccc; color: white; padding: 5px 10px; cursor: pointer; border-radius: 3px;" title="Stop">■</button>
-        <select id="accessibility-assistant-reader-voice" style="background: none; border: 1px solid #ccc; color: white; padding: 5px; background-color: rgba(0, 0, 0, 0.8); cursor: pointer; border-radius: 3px;" title="Select voice">
-          <option value="">Default voice</option>
+    controlPanel.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <h2 style="margin: 0; font-size: 16px;">Screen Reader Settings</h2>
+        <button id="accessibility-assistant-screen-reader-close" style="background: none; border: none; cursor: pointer; font-size: 18px;">×</button>
+      </div>
+      
+      <div style="margin-bottom: 15px;">
+        <label for="accessibility-assistant-screen-reader-voice">Voice:</label>
+        <select id="accessibility-assistant-screen-reader-voice" style="width: 100%; margin-top: 5px; padding: 5px;">
+          <option value="">Loading voices...</option>
         </select>
-        <select id="accessibility-assistant-reader-speed" style="background: none; border: 1px solid #ccc; color: white; padding: 5px; background-color: rgba(0, 0, 0, 0.8); cursor: pointer; border-radius: 3px;" title="Reading speed">
-          <option value="0.5">0.5x</option>
-          <option value="0.75">0.75x</option>
-          <option value="1" selected>1x</option>
-          <option value="1.25">1.25x</option>
-          <option value="1.5">1.5x</option>
-          <option value="2">2x</option>
-        </select>
-        <button id="accessibility-assistant-reader-close" style="background: none; border: none; color: white; padding: 5px; cursor: pointer; font-size: 16px;" title="Close reader controls">×</button>
+      </div>
+      
+      <div style="margin-bottom: 10px;">
+        <label for="accessibility-assistant-screen-reader-rate">Reading Speed: 1.0x</label>
+        <input type="range" id="accessibility-assistant-screen-reader-rate" min="0.5" max="2" step="0.1" value="1.0" style="width: 100%;">
+      </div>
+      
+      <div style="margin-bottom: 10px;">
+        <label for="accessibility-assistant-screen-reader-pitch">Pitch: 1.0</label>
+        <input type="range" id="accessibility-assistant-screen-reader-pitch" min="0.5" max="2" step="0.1" value="1.0" style="width: 100%;">
+      </div>
+      
+      <div style="margin-bottom: 15px;">
+        <label for="accessibility-assistant-screen-reader-volume">Volume: 100%</label>
+        <input type="range" id="accessibility-assistant-screen-reader-volume" min="0" max="1" step="0.1" value="1.0" style="width: 100%;">
+      </div>
+      
+      <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+        <button id="accessibility-assistant-read-page" style="padding: 8px 12px; background-color: #0078FF; color: white; border: none; border-radius: 4px; cursor: pointer;">
+          Read Page
+        </button>
+        <button id="accessibility-assistant-read-selection" style="padding: 8px 12px; background-color: #0078FF; color: white; border: none; border-radius: 4px; cursor: pointer;">
+          Read Selection
+        </button>
+        <button id="accessibility-assistant-stop-reading" style="padding: 8px 12px; background-color: #FF3B30; color: white; border: none; border-radius: 4px; cursor: pointer;">
+          Stop Reading
+        </button>
+      </div>
+      
+      <div style="margin-top: 10px;">
+        <p style="margin-bottom: 5px; font-size: 14px; color: #666;">Keyboard Shortcuts:</p>
+        <ul style="margin: 0; padding-left: 20px; font-size: 14px; color: #666;">
+          <li>Alt+Space: Start/Stop Reading</li>
+          <li>Alt+Right Arrow: Next Element</li>
+          <li>Alt+Left Arrow: Previous Element</li>
+          <li>Alt+Up Arrow: Increase Speed</li>
+          <li>Alt+Down Arrow: Decrease Speed</li>
+        </ul>
       </div>
     `;
     
-    document.body.appendChild(bar);
+    document.body.appendChild(controlPanel);
     
-    // Add event listeners to controls
-    document.getElementById('accessibility-assistant-reader-prev')?.addEventListener('click', readPreviousElement);
-    document.getElementById('accessibility-assistant-reader-play')?.addEventListener('click', toggleReading);
-    document.getElementById('accessibility-assistant-reader-next')?.addEventListener('click', readNextElement);
-    document.getElementById('accessibility-assistant-reader-stop')?.addEventListener('click', stopReading);
-    document.getElementById('accessibility-assistant-reader-close')?.addEventListener('click', hideControls);
-    document.getElementById('accessibility-assistant-reader-speed')?.addEventListener('change', handleSpeedChange);
-    document.getElementById('accessibility-assistant-reader-voice')?.addEventListener('change', handleVoiceChange);
+    // Add event listeners
+    document.getElementById('accessibility-assistant-screen-reader-close')?.addEventListener('click', () => {
+      hideControlPanel();
+    });
     
-    return bar;
+    document.getElementById('accessibility-assistant-screen-reader-voice')?.addEventListener('change', (e) => {
+      const voiceURI = (e.target as HTMLSelectElement).value;
+      selectedVoice = voices.find(voice => voice.voiceURI === voiceURI) || null;
+    });
+    
+    document.getElementById('accessibility-assistant-screen-reader-rate')?.addEventListener('input', (e) => {
+      rate = parseFloat((e.target as HTMLInputElement).value);
+      const label = document.querySelector('label[for="accessibility-assistant-screen-reader-rate"]');
+      if (label) {
+        label.textContent = `Reading Speed: ${rate.toFixed(1)}x`;
+      }
+    });
+    
+    document.getElementById('accessibility-assistant-screen-reader-pitch')?.addEventListener('input', (e) => {
+      pitch = parseFloat((e.target as HTMLInputElement).value);
+      const label = document.querySelector('label[for="accessibility-assistant-screen-reader-pitch"]');
+      if (label) {
+        label.textContent = `Pitch: ${pitch.toFixed(1)}`;
+      }
+    });
+    
+    document.getElementById('accessibility-assistant-screen-reader-volume')?.addEventListener('input', (e) => {
+      volume = parseFloat((e.target as HTMLInputElement).value);
+      const label = document.querySelector('label[for="accessibility-assistant-screen-reader-volume"]');
+      if (label) {
+        label.textContent = `Volume: ${Math.round(volume * 100)}%`;
+      }
+    });
+    
+    document.getElementById('accessibility-assistant-read-page')?.addEventListener('click', () => {
+      readPage();
+    });
+    
+    document.getElementById('accessibility-assistant-read-selection')?.addEventListener('click', () => {
+      readSelection();
+    });
+    
+    document.getElementById('accessibility-assistant-stop-reading')?.addEventListener('click', () => {
+      stopReading();
+    });
   }
   
-  // Load available voices for screen reader
-  function loadVoices() {
-    const voiceSelect = document.getElementById('accessibility-assistant-reader-voice') as HTMLSelectElement;
-    if (voiceSelect) {
-      // Clear existing options (except default)
-      while (voiceSelect.options.length > 1) {
-        voiceSelect.remove(1);
-      }
+  // Update voice selector with available voices
+  function updateVoiceSelector() {
+    const voiceSelector = document.getElementById('accessibility-assistant-screen-reader-voice') as HTMLSelectElement;
+    if (voiceSelector) {
+      voiceSelector.innerHTML = '';
       
-      // Get available voices
-      const voices = window.speechSynthesis.getVoices();
-      
-      // Add voices to select
       voices.forEach(voice => {
         const option = document.createElement('option');
-        option.value = voice.name;
-        option.text = `${voice.name} (${voice.lang})`;
-        voiceSelect.appendChild(option);
+        option.value = voice.voiceURI;
+        option.textContent = `${voice.name} (${voice.lang})`;
+        option.selected = selectedVoice?.voiceURI === voice.voiceURI;
+        voiceSelector.appendChild(option);
       });
     }
   }
   
-  // Handle voice change
-  function handleVoiceChange(event: Event) {
-    const voiceSelect = event.target as HTMLSelectElement;
-    const voiceName = voiceSelect.value;
-    
-    // Save preference
-    chrome.storage.sync.set({
-      'screenReader.voiceName': voiceName
-    });
-    
-    // If currently reading, restart with new voice
-    if (isReading && currentUtterance) {
-      const currentText = currentUtterance.text;
-      stopReading();
-      readTextAloud(currentText);
-    }
-  }
-  
-  // Handle speed change
-  function handleSpeedChange(event: Event) {
-    const speedSelect = event.target as HTMLSelectElement;
-    const speed = parseFloat(speedSelect.value);
-    settings.readingSpeed = speed;
-    
-    // Save preference
-    chrome.storage.sync.set({
-      'screenReader.readingSpeed': speed
-    });
-    
-    // If currently reading, update speed
-    if (currentUtterance) {
-      currentUtterance.rate = speed;
-    }
-  }
-  
-  // Setup keyboard controls for screen reader
-  function setupKeyboardControls() {
-    document.addEventListener('keydown', (event) => {
-      // Only handle keyboard shortcuts when control bar is visible
-      if (controlBar.style.display !== 'none') {
-        // Alt + Left: Previous element
-        if (event.altKey && event.key === 'ArrowLeft') {
-          event.preventDefault();
-          readPreviousElement();
-        }
-        
-        // Alt + Right: Next element
-        if (event.altKey && event.key === 'ArrowRight') {
-          event.preventDefault();
-          readNextElement();
-        }
-        
-        // Alt + Space: Play/Pause
-        if (event.altKey && event.key === ' ') {
-          event.preventDefault();
-          toggleReading();
-        }
-        
-        // Alt + Escape: Stop
-        if (event.altKey && event.key === 'Escape') {
-          event.preventDefault();
-          stopReading();
-          hideControls();
-        }
+  // Update control panel with current settings
+  function updateControlPanel() {
+    const rateSlider = document.getElementById('accessibility-assistant-screen-reader-rate') as HTMLInputElement;
+    if (rateSlider) {
+      rateSlider.value = rate.toString();
+      const label = document.querySelector('label[for="accessibility-assistant-screen-reader-rate"]');
+      if (label) {
+        label.textContent = `Reading Speed: ${rate.toFixed(1)}x`;
       }
-      
-      // Global shortcut to start reading (Alt+R)
-      if (event.altKey && event.key === 'r') {
-        event.preventDefault();
-        showControls();
-        startReading();
+    }
+    
+    const pitchSlider = document.getElementById('accessibility-assistant-screen-reader-pitch') as HTMLInputElement;
+    if (pitchSlider) {
+      pitchSlider.value = pitch.toString();
+      const label = document.querySelector('label[for="accessibility-assistant-screen-reader-pitch"]');
+      if (label) {
+        label.textContent = `Pitch: ${pitch.toFixed(1)}`;
       }
-    });
-  }
-  
-  // Show screen reader controls
-  function showControls() {
-    controlBar.style.display = 'block';
-  }
-  
-  // Hide screen reader controls
-  function hideControls() {
-    controlBar.style.display = 'none';
-  }
-  
-  // Toggle reading state
-  function toggleReading() {
-    if (isReading) {
-      pauseReading();
-    } else {
-      resumeReading();
-    }
-  }
-  
-  // Start reading from the beginning
-  function startReading() {
-    // If already reading, stop first
-    if (isReading) {
-      stopReading();
     }
     
-    // Collect readable elements
-    collectReadableElements();
-    
-    // Start reading from the beginning
-    currentReadingIndex = 0;
-    readCurrentElement();
-    
-    // Update play button
-    const playButton = document.getElementById('accessibility-assistant-reader-play');
-    if (playButton) {
-      playButton.innerHTML = '❚❚';
-      playButton.title = 'Pause';
-    }
-    
-    // Show controls
-    showControls();
-  }
-  
-  // Pause the current reading
-  function pauseReading() {
-    if (isReading) {
-      window.speechSynthesis.pause();
-      isReading = false;
-      
-      // Update play button
-      const playButton = document.getElementById('accessibility-assistant-reader-play');
-      if (playButton) {
-        playButton.innerHTML = '▶';
-        playButton.title = 'Play';
+    const volumeSlider = document.getElementById('accessibility-assistant-screen-reader-volume') as HTMLInputElement;
+    if (volumeSlider) {
+      volumeSlider.value = volume.toString();
+      const label = document.querySelector('label[for="accessibility-assistant-screen-reader-volume"]');
+      if (label) {
+        label.textContent = `Volume: ${Math.round(volume * 100)}%`;
       }
     }
   }
   
-  // Resume the current reading
-  function resumeReading() {
-    if (!isReading) {
-      window.speechSynthesis.resume();
-      isReading = true;
-      
-      // Update play button
-      const playButton = document.getElementById('accessibility-assistant-reader-play');
-      if (playButton) {
-        playButton.innerHTML = '❚❚';
-        playButton.title = 'Pause';
-      }
+  // Show control panel
+  function showControlPanel() {
+    if (controlPanel) {
+      controlPanel.style.display = 'block';
     }
   }
   
-  // Stop the current reading
-  function stopReading() {
-    window.speechSynthesis.cancel();
-    isReading = false;
-    
-    // Remove highlight
-    if (highlightOverlay) {
-      highlightOverlay.style.display = 'none';
-    }
-    
-    // Remove current highlight class
-    if (currentHighlightedElement) {
-      currentHighlightedElement.classList.remove('accessibility-assistant-reading');
-    }
-    
-    // Update play button
-    const playButton = document.getElementById('accessibility-assistant-reader-play');
-    if (playButton) {
-      playButton.innerHTML = '▶';
-      playButton.title = 'Play';
+  // Hide control panel
+  function hideControlPanel() {
+    if (controlPanel) {
+      controlPanel.style.display = 'none';
     }
   }
   
-  // Collect all readable elements on the page
-  function collectReadableElements() {
-    // Clear existing queue
-    readingQueue = [];
-    
-    // Add main content elements to queue
-    const mainContent = findMainContent();
-    
-    if (mainContent) {
-      // Get all text-containing elements within main content
-      const textElements = mainContent.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, a, button, label, input, textarea, select');
-      
-      textElements.forEach(element => {
-        // Ensure the element has actual text content and is visible
-        if (element.textContent?.trim() && isElementVisible(element as HTMLElement)) {
-          readingQueue.push(element);
-        }
-      });
-    } else {
-      // Fallback to all visible text elements if no main content is found
-      const allTextElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, a, button, label');
-      
-      allTextElements.forEach(element => {
-        if (element.textContent?.trim() && isElementVisible(element as HTMLElement)) {
-          readingQueue.push(element);
-        }
-      });
-    }
-  }
-  
-  // Find the main content of the page
-  function findMainContent(): Element | null {
-    // Try to find main content by common selectors
-    const selectors = [
-      'main',
-      'article',
-      '[role="main"]',
-      '#content',
-      '.content',
-      '#main',
-      '.main'
-    ];
-    
-    for (const selector of selectors) {
-      const element = document.querySelector(selector);
-      if (element && element.textContent && element.textContent.trim().length > 100) {
-        return element;
-      }
-    }
-    
-    // Fallback: find the element with the most text
-    let maxTextLength = 0;
-    let maxTextElement: Element | null = null;
-    
-    const contentElements = document.querySelectorAll('div, section, article');
-    contentElements.forEach(element => {
-      const textLength = element.textContent?.trim().length || 0;
-      if (textLength > maxTextLength && textLength > 100) {
-        maxTextLength = textLength;
-        maxTextElement = element;
-      }
-    });
-    
-    return maxTextElement;
-  }
-  
-  // Read the current element
-  function readCurrentElement() {
-    if (currentReadingIndex < 0 || currentReadingIndex >= readingQueue.length) {
-      return;
-    }
-    
-    const element = readingQueue[currentReadingIndex];
-    
-    // Get the text to read
-    let textToRead = '';
-    
-    // Handle different element types
-    if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
-      // For input elements, read their type, label and value
-      const input = element as HTMLInputElement;
-      const labelText = findLabelText(input);
-      textToRead = `${input.type} field, ${labelText}`;
-      
-      if (input.value) {
-        textToRead += `, current value: ${input.value}`;
-      }
-    } else if (element.tagName === 'SELECT') {
-      // For select elements, read their label and selected option
-      const select = element as HTMLSelectElement;
-      const labelText = findLabelText(select);
-      const selectedOption = select.options[select.selectedIndex];
-      textToRead = `Dropdown, ${labelText}`;
-      
-      if (selectedOption) {
-        textToRead += `, current selection: ${selectedOption.text}`;
-      }
-    } else if (element.tagName === 'A') {
-      // For links, add "link" prefix
-      textToRead = `Link: ${element.textContent?.trim()}`;
-    } else if (element.tagName.match(/^H[1-6]$/)) {
-      // For headings, add heading level
-      const level = element.tagName.substring(1);
-      textToRead = `Heading level ${level}: ${element.textContent?.trim()}`;
-    } else {
-      // For other elements, just read the text content
-      textToRead = element.textContent?.trim() || '';
-    }
-    
-    // If the element has ARIA attributes, add them to the text
-    const ariaLabel = element.getAttribute('aria-label');
-    if (ariaLabel) {
-      textToRead = ariaLabel;
-    }
-    
-    // Read the text
-    readTextAloud(textToRead);
-    
-    // Highlight the current element
-    highlightElement(element as HTMLElement);
-  }
-  
-  // Read the next element
-  function readNextElement() {
-    if (currentReadingIndex < readingQueue.length - 1) {
-      currentReadingIndex++;
-      readCurrentElement();
-    }
-  }
-  
-  // Read the previous element
-  function readPreviousElement() {
-    if (currentReadingIndex > 0) {
-      currentReadingIndex--;
-      readCurrentElement();
-    }
-  }
-  
-  // Read text aloud
-  function readTextAloud(text: string) {
-    if (!text) return;
-    
-    // Stop any current reading
-    window.speechSynthesis.cancel();
-    
-    // Create a new utterance
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = settings.readingSpeed;
-    
-    // Use preferred voice if specified
-    const voiceSelect = document.getElementById('accessibility-assistant-reader-voice') as HTMLSelectElement;
-    if (voiceSelect && voiceSelect.value) {
-      const voices = window.speechSynthesis.getVoices();
-      const selectedVoice = voices.find(voice => voice.name === voiceSelect.value);
-      if (selectedVoice) {
-        utterance.voice = selectedVoice;
-      }
-    }
-    
-    // Set up handlers
-    utterance.onend = () => {
-      // Move to next element when finished
-      if (isReading && currentReadingIndex < readingQueue.length - 1) {
-        currentReadingIndex++;
-        readCurrentElement();
+  // Toggle control panel
+  function toggleControlPanel() {
+    if (controlPanel) {
+      if (controlPanel.style.display === 'none') {
+        showControlPanel();
       } else {
-        // Reached the end
-        isReading = false;
-        
-        // Update play button
-        const playButton = document.getElementById('accessibility-assistant-reader-play');
-        if (playButton) {
-          playButton.innerHTML = '▶';
-          playButton.title = 'Play';
+        hideControlPanel();
+      }
+    }
+  }
+  
+  // Set up event listeners
+  function setupEventListeners() {
+    // Keyboard shortcuts
+    keyboardHandler = (e: KeyboardEvent) => {
+      // Alt+Space: Start/Stop reading
+      if (e.altKey && e.code === 'Space') {
+        e.preventDefault();
+        if (window.speechSynthesis.speaking) {
+          stopReading();
+        } else {
+          readPage();
         }
-        
-        // Remove highlight
-        if (highlightOverlay) {
-          highlightOverlay.style.display = 'none';
-        }
-        
-        // Remove current highlight class
-        if (currentHighlightedElement) {
-          currentHighlightedElement.classList.remove('accessibility-assistant-reading');
-        }
+      }
+      
+      // Alt+Right Arrow: Next element
+      if (e.altKey && e.code === 'ArrowRight') {
+        e.preventDefault();
+        readNextElement();
+      }
+      
+      // Alt+Left Arrow: Previous element
+      if (e.altKey && e.code === 'ArrowLeft') {
+        e.preventDefault();
+        readPreviousElement();
+      }
+      
+      // Alt+Up Arrow: Increase speed
+      if (e.altKey && e.code === 'ArrowUp') {
+        e.preventDefault();
+        increaseSpeed();
+      }
+      
+      // Alt+Down Arrow: Decrease speed
+      if (e.altKey && e.code === 'ArrowDown') {
+        e.preventDefault();
+        decreaseSpeed();
       }
     };
     
-    // Store current utterance
-    currentUtterance = utterance;
-    
-    // Start reading
-    window.speechSynthesis.speak(utterance);
-    isReading = true;
+    document.addEventListener('keydown', keyboardHandler);
   }
   
-  // Highlight the element currently being read
-  function highlightElement(element: HTMLElement) {
-    // Remove highlight from previous element
-    if (currentHighlightedElement) {
-      currentHighlightedElement.classList.remove('accessibility-assistant-reading');
+  // Enable screen reader
+  function enableScreenReader() {
+    if (isActive) return;
+    
+    // Scan page for readable elements
+    scanPage();
+    
+    // Show indicator that screen reader is active
+    const screenReaderIndicator = document.createElement('div');
+    screenReaderIndicator.id = 'accessibility-assistant-screen-reader-indicator';
+    screenReaderIndicator.style.position = 'fixed';
+    screenReaderIndicator.style.top = '10px';
+    screenReaderIndicator.style.right = '10px';
+    screenReaderIndicator.style.backgroundColor = '#0078FF';
+    screenReaderIndicator.style.color = 'white';
+    screenReaderIndicator.style.padding = '5px 10px';
+    screenReaderIndicator.style.borderRadius = '3px';
+    screenReaderIndicator.style.fontSize = '12px';
+    screenReaderIndicator.style.zIndex = '10000';
+    screenReaderIndicator.innerHTML = 'Screen Reader Active';
+    
+    document.body.appendChild(screenReaderIndicator);
+    
+    // Add keyboard focus styles
+    const focusStyles = document.createElement('style');
+    focusStyles.id = 'accessibility-assistant-screen-reader-styles';
+    focusStyles.textContent = `
+      .accessibility-assistant-reading-current {
+        outline: 3px solid #0078FF !important;
+        background-color: rgba(0, 120, 255, 0.1) !important;
+      }
+    `;
+    document.head.appendChild(focusStyles);
+    
+    isActive = true;
+    settings.screenReaderEnabled = true;
+    
+    // Save settings
+    saveSettings();
+  }
+  
+  // Disable screen reader
+  function disableScreenReader() {
+    if (!isActive) return;
+    
+    // Stop any ongoing reading
+    stopReading();
+    
+    // Remove indicator
+    const indicator = document.getElementById('accessibility-assistant-screen-reader-indicator');
+    if (indicator && indicator.parentNode) {
+      indicator.parentNode.removeChild(indicator);
     }
     
-    // Add highlight to current element
-    element.classList.add('accessibility-assistant-reading');
-    currentHighlightedElement = element;
+    // Remove focus styles
+    const styles = document.getElementById('accessibility-assistant-screen-reader-styles');
+    if (styles && styles.parentNode) {
+      styles.parentNode.removeChild(styles);
+    }
     
-    // Update highlight overlay
-    if (highlightOverlay && settings.highlightReadText) {
-      const rect = element.getBoundingClientRect();
+    // Remove highlight from current element
+    clearCurrentElementHighlight();
+    
+    isActive = false;
+    settings.screenReaderEnabled = false;
+    
+    // Save settings
+    saveSettings();
+  }
+  
+  // Toggle screen reader
+  function toggleScreenReader() {
+    if (isActive) {
+      disableScreenReader();
+    } else {
+      enableScreenReader();
+    }
+  }
+  
+  // Scan page for readable elements
+  function scanPage() {
+    elements = [];
+    currentElementIndex = -1;
+    
+    // Get all headings, paragraphs, lists, links, buttons, and images
+    const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+    const paragraphs = Array.from(document.querySelectorAll('p'));
+    const listItems = Array.from(document.querySelectorAll('li'));
+    const links = Array.from(document.querySelectorAll('a'));
+    const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+    const images = Array.from(document.querySelectorAll('img[alt]'));
+    const inputs = Array.from(document.querySelectorAll('input, textarea, select'));
+    
+    // Process headings
+    headings.forEach(heading => {
+      const text = heading.textContent?.trim() || '';
+      if (text) {
+        const level = parseInt(heading.tagName.substring(1));
+        elements.push({
+          element: heading as HTMLElement,
+          text: `Heading level ${level}: ${text}`,
+          role: 'heading',
+          level
+        });
+      }
+    });
+    
+    // Process paragraphs
+    paragraphs.forEach(paragraph => {
+      const text = paragraph.textContent?.trim() || '';
+      if (text) {
+        elements.push({
+          element: paragraph as HTMLElement,
+          text,
+          role: 'paragraph'
+        });
+      }
+    });
+    
+    // Process list items
+    listItems.forEach(item => {
+      const text = item.textContent?.trim() || '';
+      if (text) {
+        elements.push({
+          element: item as HTMLElement,
+          text: `List item: ${text}`,
+          role: 'listitem'
+        });
+      }
+    });
+    
+    // Process links
+    links.forEach(link => {
+      const text = link.textContent?.trim() || '';
+      if (text) {
+        elements.push({
+          element: link as HTMLElement,
+          text: `Link: ${text}`,
+          role: 'link'
+        });
+      }
+    });
+    
+    // Process buttons
+    buttons.forEach(button => {
+      const text = button.textContent?.trim() || '';
+      if (text) {
+        elements.push({
+          element: button as HTMLElement,
+          text: `Button: ${text}`,
+          role: 'button'
+        });
+      }
+    });
+    
+    // Process images with alt text
+    images.forEach(image => {
+      const alt = image.getAttribute('alt')?.trim() || '';
+      if (alt && alt !== '') {
+        elements.push({
+          element: image as HTMLElement,
+          text: `Image: ${alt}`,
+          role: 'img'
+        });
+      }
+    });
+    
+    // Process form elements
+    inputs.forEach(input => {
+      let role = 'input';
+      let text = '';
+      let state = '';
       
-      highlightOverlay.style.top = `${window.scrollY + rect.top}px`;
-      highlightOverlay.style.left = `${window.scrollX + rect.left}px`;
-      highlightOverlay.style.width = `${rect.width}px`;
-      highlightOverlay.style.height = `${rect.height}px`;
-      highlightOverlay.style.display = 'block';
+      if (input instanceof HTMLInputElement) {
+        switch (input.type) {
+          case 'checkbox':
+            role = 'checkbox';
+            text = getInputLabel(input) || 'Checkbox';
+            state = input.checked ? 'checked' : 'not checked';
+            break;
+          case 'radio':
+            role = 'radio';
+            text = getInputLabel(input) || 'Radio button';
+            state = input.checked ? 'selected' : 'not selected';
+            break;
+          case 'submit':
+            role = 'button';
+            text = input.value || 'Submit';
+            break;
+          case 'button':
+            role = 'button';
+            text = input.value || 'Button';
+            break;
+          default:
+            text = getInputLabel(input) || input.placeholder || input.name || 'Text field';
+        }
+      } else if (input instanceof HTMLTextAreaElement) {
+        text = getInputLabel(input) || input.placeholder || 'Text area';
+      } else if (input instanceof HTMLSelectElement) {
+        role = 'combobox';
+        text = getInputLabel(input) || 'Dropdown menu';
+        state = input.options[input.selectedIndex]?.text || '';
+      }
       
-      // Scroll element into view
-      element.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center'
+      elements.push({
+        element: input as HTMLElement,
+        text: `${text}${state ? `, ${state}` : ''}`,
+        role,
+        state
       });
-    }
+    });
+    
+    // Sort elements by their position in the document (top to bottom)
+    elements.sort((a, b) => {
+      const rectA = a.element.getBoundingClientRect();
+      const rectB = b.element.getBoundingClientRect();
+      return rectA.top - rectB.top;
+    });
   }
   
-  // Find the label text for an input element
-  function findLabelText(input: HTMLElement): string {
-    // Try to find label by 'for' attribute
+  // Get label for form input
+  function getInputLabel(input: HTMLElement): string {
+    // Check for associated label
     if (input.id) {
       const label = document.querySelector(`label[for="${input.id}"]`);
-      if (label && label.textContent) {
-        return label.textContent.trim();
+      if (label) {
+        return label.textContent?.trim() || '';
       }
     }
     
-    // Try to find parent label
+    // Check for parent label
     let parent = input.parentElement;
     while (parent) {
-      if (parent.tagName === 'LABEL' && parent.textContent) {
-        // Return the label text without the input's own text
-        const labelText = parent.textContent.trim();
-        const inputText = input.textContent?.trim() || '';
-        return labelText.replace(inputText, '').trim();
+      if (parent.tagName === 'LABEL') {
+        // Remove the input's text from the label text
+        const labelText = parent.textContent || '';
+        return labelText.trim();
       }
       parent = parent.parentElement;
     }
     
-    // Try to find aria-label
+    // Check for aria-label
     const ariaLabel = input.getAttribute('aria-label');
     if (ariaLabel) {
       return ariaLabel;
     }
     
-    // Try to find placeholder
-    const placeholder = (input as HTMLInputElement).placeholder;
-    if (placeholder) {
-      return `Field with placeholder ${placeholder}`;
+    // Check for aria-labelledby
+    const ariaLabelledBy = input.getAttribute('aria-labelledby');
+    if (ariaLabelledBy) {
+      const labelElement = document.getElementById(ariaLabelledBy);
+      if (labelElement) {
+        return labelElement.textContent?.trim() || '';
+      }
     }
     
-    // Try to find name attribute
-    const name = (input as HTMLInputElement).name;
-    if (name) {
-      return `Field named ${name}`;
+    return '';
+  }
+  
+  // Read the entire page
+  function readPage() {
+    // Make sure screen reader is enabled
+    if (!isActive) {
+      enableScreenReader();
     }
     
-    // Fallback
-    return 'Unlabeled field';
+    // Scan page if needed
+    if (elements.length === 0) {
+      scanPage();
+    }
+    
+    // Start reading from beginning
+    currentElementIndex = -1;
+    readNextElement();
   }
   
-  // Enhance heading elements for better screen reader navigation
-  function enhanceHeadingElements() {
-    const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-    
-    headings.forEach(heading => {
-      // Add role="heading" and aria-level if not present
-      if (!heading.getAttribute('role')) {
-        heading.setAttribute('role', 'heading');
+  // Read currently selected text
+  function readSelection() {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      const text = selection.toString().trim();
+      if (text) {
+        speak(text);
       }
-      
-      const level = heading.tagName.charAt(1);
-      if (!heading.getAttribute('aria-level')) {
-        heading.setAttribute('aria-level', level);
-      }
-    });
-  }
-  
-  // Enhance link elements for better screen reader navigation
-  function enhanceLinkElements() {
-    const links = document.querySelectorAll('a');
-    
-    links.forEach(link => {
-      // Add role="link" if not present
-      if (!link.getAttribute('role')) {
-        link.setAttribute('role', 'link');
-      }
-      
-      // If link has no text but has an image, add description
-      if ((!link.textContent || link.textContent.trim() === '') && link.querySelector('img')) {
-        const img = link.querySelector('img');
-        const altText = img?.getAttribute('alt');
-        
-        if (!altText || altText.trim() === '') {
-          // No alt text, try to generate one
-          const imgUrl = img?.src || '';
-          const filename = imgUrl.split('/').pop() || '';
-          
-          link.setAttribute('aria-label', `Image link: ${filename}`);
-        } else {
-          link.setAttribute('aria-label', `Image link: ${altText}`);
-        }
-      }
-      
-      // If link opens in new window, indicate this
-      if (link.getAttribute('target') === '_blank') {
-        let ariaLabel = link.getAttribute('aria-label') || '';
-        
-        if (ariaLabel) {
-          ariaLabel += ' (opens in new window)';
-        } else {
-          ariaLabel = `${link.textContent} (opens in new window)`;
-        }
-        
-        link.setAttribute('aria-label', ariaLabel);
-      }
-    });
-  }
-  
-  // Enhance form elements for better screen reader navigation
-  function enhanceFormElements() {
-    // Add missing labels to form fields
-    const formFields = document.querySelectorAll('input, textarea, select');
-    
-    formFields.forEach(field => {
-      const hasLabel = field.id && document.querySelector(`label[for="${field.id}"]`);
-      const hasAriaLabel = field.getAttribute('aria-label');
-      const hasPlaceholder = (field as HTMLInputElement).placeholder;
-      
-      if (!hasLabel && !hasAriaLabel && !hasPlaceholder) {
-        // Try to generate a label based on name or surrounding text
-        const fieldName = (field as HTMLInputElement).name;
-        
-        if (fieldName) {
-          // Convert name attribute to readable label (e.g., "first_name" -> "First name")
-          const readableName = fieldName
-            .replace(/[_-]/g, ' ')
-            .replace(/([A-Z])/g, ' $1')
-            .toLowerCase()
-            .split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-          
-          field.setAttribute('aria-label', readableName);
-        }
-      }
-      
-      // Mark required fields
-      if ((field as HTMLInputElement).required) {
-        let ariaLabel = field.getAttribute('aria-label') || '';
-        
-        if (ariaLabel) {
-          ariaLabel += ' (required)';
-        } else {
-          const label = field.id && document.querySelector(`label[for="${field.id}"]`);
-          ariaLabel = `${label?.textContent || 'Field'} (required)`;
-        }
-        
-        field.setAttribute('aria-label', ariaLabel);
-        field.setAttribute('aria-required', 'true');
-      }
-    });
-  }
-  
-  // Enhance image elements with auto-generated descriptions
-  function enhanceImageElements() {
-    const images = document.querySelectorAll('img');
-    
-    images.forEach(img => {
-      // Only enhance images that have no alt text or empty alt text
-      if (!img.hasAttribute('alt') || img.getAttribute('alt') === '') {
-        // Try to generate a description from filename or context
-        const imgUrl = img.src;
-        const filename = imgUrl.split('/').pop() || '';
-        
-        // Set a temporary alt text based on filename
-        img.setAttribute('alt', `Image: ${filename}`);
-        
-        // Mark for potential AI-based description
-        img.classList.add('accessibility-assistant-needs-description');
-      }
-    });
-  }
-  
-  // Handle image hover for automatic descriptions
-  function handleImageHover(event: MouseEvent) {
-    const target = event.target as HTMLElement;
-    
-    if (target.tagName === 'IMG' && target.classList.contains('accessibility-assistant-needs-description')) {
-      // Request image description from background script
-      chrome.runtime.sendMessage({
-        type: 'DESCRIBE_IMAGE',
-        payload: { src: (target as HTMLImageElement).src }
-      }, (response) => {
-        if (response && response.description) {
-          // Update alt text with AI-generated description
-          target.setAttribute('alt', response.description);
-          
-          // Remove the needs-description class
-          target.classList.remove('accessibility-assistant-needs-description');
-        }
-      });
     }
   }
   
-  // Check if an element is visible
-  function isElementVisible(element: HTMLElement): boolean {
-    const style = window.getComputedStyle(element);
+  // Read next element
+  function readNextElement() {
+    // Stop any current speech
+    stopReading();
     
-    return style.display !== 'none' &&
-           style.visibility !== 'hidden' &&
-           style.opacity !== '0' &&
-           element.offsetWidth > 0 &&
-           element.offsetHeight > 0;
+    // Remove highlight from current element
+    clearCurrentElementHighlight();
+    
+    // Move to next element
+    currentElementIndex++;
+    if (currentElementIndex >= elements.length) {
+      currentElementIndex = 0; // Loop back to beginning
+    }
+    
+    // Get current element
+    const element = elements[currentElementIndex];
+    
+    // Highlight element
+    highlightCurrentElement(element);
+    
+    // Scroll element into view
+    element.element.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center'
+    });
+    
+    // Speak element text
+    speak(element.text);
+  }
+  
+  // Read previous element
+  function readPreviousElement() {
+    // Stop any current speech
+    stopReading();
+    
+    // Remove highlight from current element
+    clearCurrentElementHighlight();
+    
+    // Move to previous element
+    currentElementIndex--;
+    if (currentElementIndex < 0) {
+      currentElementIndex = elements.length - 1; // Loop to end
+    }
+    
+    // Get current element
+    const element = elements[currentElementIndex];
+    
+    // Highlight element
+    highlightCurrentElement(element);
+    
+    // Scroll element into view
+    element.element.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center'
+    });
+    
+    // Speak element text
+    speak(element.text);
+  }
+  
+  // Highlight current element
+  function highlightCurrentElement(element: ScreenReaderElement) {
+    element.element.classList.add('accessibility-assistant-reading-current');
+  }
+  
+  // Clear highlight from current element
+  function clearCurrentElementHighlight() {
+    if (currentElementIndex >= 0 && currentElementIndex < elements.length) {
+      elements[currentElementIndex].element.classList.remove('accessibility-assistant-reading-current');
+    }
+  }
+  
+  // Stop reading
+  function stopReading() {
+    window.speechSynthesis.cancel();
+    if (currentSpeech) {
+      currentSpeech = null;
+    }
+  }
+  
+  // Speak text
+  function speak(text: string) {
+    // Create speech utterance
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Set voice if available
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+    }
+    
+    // Set properties
+    utterance.rate = rate;
+    utterance.pitch = pitch;
+    utterance.volume = volume;
+    
+    // Set up event handlers
+    utterance.onend = () => {
+      currentSpeech = null;
+    };
+    
+    utterance.onerror = (e) => {
+      console.error('Speech synthesis error:', e);
+      currentSpeech = null;
+    };
+    
+    // Store current speech
+    currentSpeech = utterance;
+    
+    // Start speaking
+    window.speechSynthesis.speak(utterance);
+  }
+  
+  // Increase reading speed
+  function increaseSpeed() {
+    rate = Math.min(rate + 0.1, 2);
+    updateControlPanel();
+  }
+  
+  // Decrease reading speed
+  function decreaseSpeed() {
+    rate = Math.max(rate - 0.1, 0.5);
+    updateControlPanel();
   }
   
   // Clean up resources
   function cleanup() {
-    // Stop any active reading
+    // Stop any ongoing reading
     stopReading();
     
-    // Remove event listeners
-    if (settings.autoDescribeImages) {
-      document.removeEventListener('mouseover', handleImageHover);
+    // Remove event listener
+    if (keyboardHandler) {
+      document.removeEventListener('keydown', keyboardHandler);
     }
     
-    window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+    // Disable screen reader
+    disableScreenReader();
     
     // Remove UI elements
-    if (highlightOverlay && highlightOverlay.parentNode) {
-      highlightOverlay.parentNode.removeChild(highlightOverlay);
-    }
-    
-    if (controlBar && controlBar.parentNode) {
-      controlBar.parentNode.removeChild(controlBar);
+    if (controlPanel && controlPanel.parentNode) {
+      controlPanel.parentNode.removeChild(controlPanel);
     }
   }
   
-  // Initialize screen reader
+  // Initialize
   initialize();
   
-  // Return public methods
+  // Public API
   return {
-    startReading,
-    pauseReading,
-    resumeReading,
+    showControlPanel,
+    hideControlPanel,
+    toggleControlPanel,
+    enableScreenReader,
+    disableScreenReader,
+    toggleScreenReader,
+    readPage,
+    readSelection,
+    readNextElement,
+    readPreviousElement,
     stopReading,
-    readTextAloud,
-    showControls,
-    hideControls,
+    increaseSpeed,
+    decreaseSpeed,
     cleanup
   };
 }
 
-export default createScreenReader; 
+export default createScreenReader;

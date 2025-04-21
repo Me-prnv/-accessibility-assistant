@@ -1,191 +1,97 @@
 // Motor Assistant Module for Accessibility Assistant
-// Provides features for users with motor disabilities, including voice control, dwell clicking, and keyboard navigation
+// Provides motor accessibility features like dwell clicking, voice control, and keyboard navigation
 
-// Types
-interface MotorAssistantSettings {
-  enableDwellClicking: boolean;
-  dwellTime: number; // in milliseconds
-  enableMouseTracking: boolean;
-  enhanceKeyboardNavigation: boolean;
-  enableVoiceControl: boolean;
-  showClickableElements: boolean;
-  autoFillForms: boolean;
-  enableGestures: boolean;
-  enableSwitchControl: boolean;
-}
+import { MotorSettings, NavigableElement } from '../../types';
 
 // Default settings
-const defaultSettings: MotorAssistantSettings = {
-  enableDwellClicking: false,
-  dwellTime: 1000, // 1 second
-  enableMouseTracking: false,
-  enhanceKeyboardNavigation: true,
-  enableVoiceControl: false,
-  showClickableElements: true,
-  autoFillForms: true,
-  enableGestures: false,
-  enableSwitchControl: false
+const defaultSettings: MotorSettings = {
+  enabled: false,
+  dwellClickingEnabled: false,
+  dwellTime: 1000, // milliseconds
+  mouseTrackingEnabled: false,
+  keyboardNavigationEnabled: false,
+  showClickableElements: false,
+  autoFillForms: false,
+  gesturesEnabled: false,
+  switchControlEnabled: false,
+  voiceControlEnabled: false
 };
 
 // Initialize motor assistant
-export function createMotorAssistant(options: Partial<MotorAssistantSettings> = {}) {
+export function createMotorAssistant(options: Partial<MotorSettings> = {}) {
   // Merge default settings with provided options
-  const settings: MotorAssistantSettings = {
+  const settings: MotorSettings = {
     ...defaultSettings,
     ...options
   };
   
-  // State variables
-  let cursorPosition = { x: 0, y: 0 };
-  let dwellTimer: NodeJS.Timeout | null = null;
-  let currentHoverElement: HTMLElement | null = null;
-  let keyboardNavigationMode = false;
-  let keyboardFocusedElement: HTMLElement | null = null;
+  // UI elements
+  let controlPanel: HTMLElement | null = null;
+  let dwellIndicator: HTMLElement | null = null;
+  let highlightOverlay: HTMLElement | null = null;
   
-  // UI Elements
-  let cursorOverlay: HTMLDivElement | null = null;
-  let dwellIndicator: HTMLDivElement | null = null;
-  let keyboardNavigationIndicator: HTMLDivElement | null = null;
-  let controlPanel: HTMLDivElement | null = null;
+  // State
+  const dwellState: {
+    element: HTMLElement | null;
+    startTime: number | null;
+    timer: number | null;
+    isActive: boolean;
+  } = {
+    element: null,
+    startTime: null,
+    timer: null,
+    isActive: false
+  };
   
   // Event handlers
   let mouseMoveHandler: ((e: MouseEvent) => void) | null = null;
   let keyboardHandler: ((e: KeyboardEvent) => void) | null = null;
   
+  // Array of clickable elements
+  let clickableElements: NavigableElement[] = [];
+  let currentElementIndex = -1;
+  
   // Initialize
   function initialize() {
+    // Create UI elements
+    createUI();
+    
     // Load settings from storage
     loadSettings();
     
-    // Create UI elements
-    if (settings.enableDwellClicking || settings.enableMouseTracking) {
-      createCursorOverlay();
-    }
+    // Set up event listeners
+    setupEventListeners();
     
-    // Set up event handlers
-    setupEventHandlers();
-    
-    // Apply settings
-    applySettings();
-    
-    // Enhance keyboard navigation
-    if (settings.enhanceKeyboardNavigation) {
-      enhanceKeyboardNavigation();
-    }
-    
-    // Create control panel
-    createControlPanel();
-    
-    // Highlight clickable elements
-    if (settings.showClickableElements) {
-      highlightClickableElements();
-    }
-    
-    // Enhanced form controls
-    if (settings.autoFillForms) {
-      enhanceFormControls();
-    }
+    // Initialize features based on settings
+    initializeFeatures();
   }
   
-  // Load saved settings from storage
+  // Load settings from Chrome storage
   function loadSettings() {
     chrome.storage.sync.get('motorAssistant', (data) => {
       if (data.motorAssistant) {
-        // Merge saved settings with current settings
         Object.assign(settings, data.motorAssistant);
-        applySettings();
+        updateControlPanel();
+        initializeFeatures();
       }
     });
   }
   
-  // Save settings to storage
+  // Save settings to Chrome storage
   function saveSettings() {
     chrome.storage.sync.set({
       motorAssistant: settings
     });
   }
   
-  // Apply current settings
-  function applySettings() {
-    // Apply dwell clicking
-    if (settings.enableDwellClicking) {
-      enableDwellClicking();
-    } else {
-      disableDwellClicking();
-    }
-    
-    // Apply cursor tracking
-    if (settings.enableMouseTracking) {
-      enableMouseTracking();
-    } else {
-      disableMouseTracking();
-    }
-    
-    // Apply keyboard navigation enhancements
-    if (settings.enhanceKeyboardNavigation) {
-      enhanceKeyboardNavigation();
-    } else {
-      disableKeyboardNavigation();
-    }
-    
-    // Apply clickable elements highlighting
-    if (settings.showClickableElements) {
-      highlightClickableElements();
-    } else {
-      unhighlightClickableElements();
-    }
-    
-    // Update control panel if it exists
-    if (controlPanel) {
-      updateControlPanel();
-    }
+  // Create UI elements
+  function createUI() {
+    createControlPanel();
+    createDwellIndicator();
+    createHighlightOverlay();
   }
   
-  // Create cursor overlay for dwell clicking and mouse tracking
-  function createCursorOverlay() {
-    // Create container
-    cursorOverlay = document.createElement('div');
-    cursorOverlay.id = 'accessibility-assistant-cursor-overlay';
-    cursorOverlay.style.position = 'fixed';
-    cursorOverlay.style.pointerEvents = 'none';
-    cursorOverlay.style.zIndex = '9999';
-    cursorOverlay.style.width = '20px';
-    cursorOverlay.style.height = '20px';
-    cursorOverlay.style.borderRadius = '50%';
-    cursorOverlay.style.backgroundColor = 'rgba(0, 120, 255, 0.3)';
-    cursorOverlay.style.border = '1px solid rgba(0, 120, 255, 0.7)';
-    cursorOverlay.style.transform = 'translate(-50%, -50%)';
-    cursorOverlay.style.display = 'none';
-    document.body.appendChild(cursorOverlay);
-    
-    // Create dwell indicator
-    dwellIndicator = document.createElement('div');
-    dwellIndicator.id = 'accessibility-assistant-dwell-indicator';
-    dwellIndicator.style.position = 'fixed';
-    dwellIndicator.style.pointerEvents = 'none';
-    dwellIndicator.style.zIndex = '9999';
-    dwellIndicator.style.width = '30px';
-    dwellIndicator.style.height = '30px';
-    dwellIndicator.style.borderRadius = '50%';
-    dwellIndicator.style.border = '2px solid rgba(0, 120, 255, 0.7)';
-    dwellIndicator.style.borderTop = '2px solid transparent';
-    dwellIndicator.style.transform = 'translate(-50%, -50%)';
-    dwellIndicator.style.display = 'none';
-    dwellIndicator.style.animation = 'accessibility-assistant-spin 1s linear infinite';
-    document.body.appendChild(dwellIndicator);
-    
-    // Add animation style
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes accessibility-assistant-spin {
-        0% { transform: translate(-50%, -50%) rotate(0deg); }
-        100% { transform: translate(-50%, -50%) rotate(360deg); }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-  
-  // Create control panel for motor accessibility settings
+  // Create control panel UI
   function createControlPanel() {
     controlPanel = document.createElement('div');
     controlPanel.id = 'accessibility-assistant-motor-panel';
@@ -199,8 +105,9 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
     controlPanel.style.padding = '15px';
     controlPanel.style.zIndex = '10000';
     controlPanel.style.display = 'none';
+    controlPanel.style.maxHeight = '80vh';
+    controlPanel.style.overflowY = 'auto';
     
-    // Add controls
     controlPanel.innerHTML = `
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
         <h2 style="margin: 0; font-size: 16px;">Motor Accessibility Settings</h2>
@@ -210,22 +117,19 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
       <div style="margin-bottom: 15px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
           <label for="accessibility-assistant-dwell-clicking">Dwell Clicking</label>
-          <input type="checkbox" id="accessibility-assistant-dwell-clicking" ${settings.enableDwellClicking ? 'checked' : ''}>
+          <input type="checkbox" id="accessibility-assistant-dwell-clicking" ${settings.dwellClickingEnabled ? 'checked' : ''}>
         </div>
         
         <div style="margin-bottom: 10px;">
           <label for="accessibility-assistant-dwell-time">Dwell Time: ${settings.dwellTime}ms</label>
-          <input type="range" id="accessibility-assistant-dwell-time" min="500" max="3000" step="100" value="${settings.dwellTime}" style="width: 100%;">
+          <input type="range" id="accessibility-assistant-dwell-time" min="500" max="3000" step="100" value="${settings.dwellTime}" style="width: 100%;" ${!settings.dwellClickingEnabled ? 'disabled' : ''}>
         </div>
-        
+      </div>
+      
+      <div style="margin-bottom: 15px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-          <label for="accessibility-assistant-mouse-tracking">Mouse Tracking</label>
-          <input type="checkbox" id="accessibility-assistant-mouse-tracking" ${settings.enableMouseTracking ? 'checked' : ''}>
-        </div>
-        
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-          <label for="accessibility-assistant-keyboard-nav">Enhanced Keyboard Navigation</label>
-          <input type="checkbox" id="accessibility-assistant-keyboard-nav" ${settings.enhanceKeyboardNavigation ? 'checked' : ''}>
+          <label for="accessibility-assistant-keyboard-navigation">Keyboard Navigation</label>
+          <input type="checkbox" id="accessibility-assistant-keyboard-navigation" ${settings.keyboardNavigationEnabled ? 'checked' : ''}>
         </div>
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -234,8 +138,13 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
         </div>
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-          <label for="accessibility-assistant-autofill-forms">Auto-Fill Forms Support</label>
-          <input type="checkbox" id="accessibility-assistant-autofill-forms" ${settings.autoFillForms ? 'checked' : ''}>
+          <label for="accessibility-assistant-auto-fill">Auto-Fill Forms</label>
+          <input type="checkbox" id="accessibility-assistant-auto-fill" ${settings.autoFillForms ? 'checked' : ''}>
+        </div>
+        
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <label for="accessibility-assistant-gestures">Gesture Controls</label>
+          <input type="checkbox" id="accessibility-assistant-gestures" ${settings.gesturesEnabled ? 'checked' : ''}>
         </div>
       </div>
       
@@ -247,13 +156,17 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
     
     document.body.appendChild(controlPanel);
     
-    // Add event listeners to controls
+    // Add event listeners
     document.getElementById('accessibility-assistant-motor-close')?.addEventListener('click', () => {
       hideControlPanel();
     });
     
     document.getElementById('accessibility-assistant-dwell-clicking')?.addEventListener('change', (e) => {
-      settings.enableDwellClicking = (e.target as HTMLInputElement).checked;
+      settings.dwellClickingEnabled = (e.target as HTMLInputElement).checked;
+      const dwellTimeSlider = document.getElementById('accessibility-assistant-dwell-time') as HTMLInputElement;
+      if (dwellTimeSlider) {
+        dwellTimeSlider.disabled = !settings.dwellClickingEnabled;
+      }
     });
     
     document.getElementById('accessibility-assistant-dwell-time')?.addEventListener('input', (e) => {
@@ -264,20 +177,25 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
       }
     });
     
-    document.getElementById('accessibility-assistant-mouse-tracking')?.addEventListener('change', (e) => {
-      settings.enableMouseTracking = (e.target as HTMLInputElement).checked;
-    });
-    
-    document.getElementById('accessibility-assistant-keyboard-nav')?.addEventListener('change', (e) => {
-      settings.enhanceKeyboardNavigation = (e.target as HTMLInputElement).checked;
+    document.getElementById('accessibility-assistant-keyboard-navigation')?.addEventListener('change', (e) => {
+      settings.keyboardNavigationEnabled = (e.target as HTMLInputElement).checked;
     });
     
     document.getElementById('accessibility-assistant-highlight-clickable')?.addEventListener('change', (e) => {
       settings.showClickableElements = (e.target as HTMLInputElement).checked;
+      if (settings.showClickableElements) {
+        highlightClickableElements();
+      } else {
+        clearElementHighlights();
+      }
     });
     
-    document.getElementById('accessibility-assistant-autofill-forms')?.addEventListener('change', (e) => {
+    document.getElementById('accessibility-assistant-auto-fill')?.addEventListener('change', (e) => {
       settings.autoFillForms = (e.target as HTMLInputElement).checked;
+    });
+    
+    document.getElementById('accessibility-assistant-gestures')?.addEventListener('change', (e) => {
+      settings.gesturesEnabled = (e.target as HTMLInputElement).checked;
     });
     
     document.getElementById('accessibility-assistant-motor-reset')?.addEventListener('click', resetToDefaults);
@@ -289,32 +207,60 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
     });
   }
   
+  // Create dwell indicator
+  function createDwellIndicator() {
+    dwellIndicator = document.createElement('div');
+    dwellIndicator.id = 'accessibility-assistant-dwell-indicator';
+    dwellIndicator.style.position = 'absolute';
+    dwellIndicator.style.width = '30px';
+    dwellIndicator.style.height = '30px';
+    dwellIndicator.style.borderRadius = '50%';
+    dwellIndicator.style.border = '2px solid #3498db';
+    dwellIndicator.style.borderTop = '2px solid transparent';
+    dwellIndicator.style.boxSizing = 'border-box';
+    dwellIndicator.style.display = 'none';
+    dwellIndicator.style.zIndex = '10001';
+    dwellIndicator.style.pointerEvents = 'none';
+    dwellIndicator.style.transition = 'transform 0.1s ease-out';
+    
+    document.body.appendChild(dwellIndicator);
+  }
+  
+  // Create highlight overlay for clickable elements
+  function createHighlightOverlay() {
+    highlightOverlay = document.createElement('div');
+    highlightOverlay.id = 'accessibility-assistant-highlight-overlay';
+    highlightOverlay.style.position = 'absolute';
+    highlightOverlay.style.top = '0';
+    highlightOverlay.style.left = '0';
+    highlightOverlay.style.width = '100%';
+    highlightOverlay.style.height = '100%';
+    highlightOverlay.style.zIndex = '9999';
+    highlightOverlay.style.pointerEvents = 'none';
+    
+    document.body.appendChild(highlightOverlay);
+  }
+  
   // Update control panel with current settings
   function updateControlPanel() {
-    if (!controlPanel) return;
-    
-    const dwellClickingCheckbox = document.getElementById('accessibility-assistant-dwell-clicking') as HTMLInputElement;
-    if (dwellClickingCheckbox) {
-      dwellClickingCheckbox.checked = settings.enableDwellClicking;
+    const dwellCheckbox = document.getElementById('accessibility-assistant-dwell-clicking') as HTMLInputElement;
+    if (dwellCheckbox) {
+      dwellCheckbox.checked = settings.dwellClickingEnabled;
     }
     
-    const dwellTimeInput = document.getElementById('accessibility-assistant-dwell-time') as HTMLInputElement;
-    if (dwellTimeInput) {
-      dwellTimeInput.value = settings.dwellTime.toString();
+    const dwellTimeSlider = document.getElementById('accessibility-assistant-dwell-time') as HTMLInputElement;
+    if (dwellTimeSlider) {
+      dwellTimeSlider.value = settings.dwellTime.toString();
+      dwellTimeSlider.disabled = !settings.dwellClickingEnabled;
       const label = document.querySelector('label[for="accessibility-assistant-dwell-time"]');
       if (label) {
         label.textContent = `Dwell Time: ${settings.dwellTime}ms`;
       }
     }
     
-    const mouseTrackingCheckbox = document.getElementById('accessibility-assistant-mouse-tracking') as HTMLInputElement;
-    if (mouseTrackingCheckbox) {
-      mouseTrackingCheckbox.checked = settings.enableMouseTracking;
-    }
-    
-    const keyboardNavCheckbox = document.getElementById('accessibility-assistant-keyboard-nav') as HTMLInputElement;
+    const keyboardNavCheckbox = document.getElementById('accessibility-assistant-keyboard-navigation') as HTMLInputElement;
     if (keyboardNavCheckbox) {
-      keyboardNavCheckbox.checked = settings.enhanceKeyboardNavigation;
+      keyboardNavCheckbox.checked = settings.keyboardNavigationEnabled;
     }
     
     const highlightClickableCheckbox = document.getElementById('accessibility-assistant-highlight-clickable') as HTMLInputElement;
@@ -322,9 +268,14 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
       highlightClickableCheckbox.checked = settings.showClickableElements;
     }
     
-    const autoFillFormsCheckbox = document.getElementById('accessibility-assistant-autofill-forms') as HTMLInputElement;
-    if (autoFillFormsCheckbox) {
-      autoFillFormsCheckbox.checked = settings.autoFillForms;
+    const autoFillCheckbox = document.getElementById('accessibility-assistant-auto-fill') as HTMLInputElement;
+    if (autoFillCheckbox) {
+      autoFillCheckbox.checked = settings.autoFillForms;
+    }
+    
+    const gesturesCheckbox = document.getElementById('accessibility-assistant-gestures') as HTMLInputElement;
+    if (gesturesCheckbox) {
+      gesturesCheckbox.checked = settings.gesturesEnabled;
     }
   }
   
@@ -342,7 +293,7 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
     }
   }
   
-  // Toggle control panel visibility
+  // Toggle control panel
   function toggleControlPanel() {
     if (controlPanel) {
       if (controlPanel.style.display === 'none') {
@@ -359,397 +310,563 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
     updateControlPanel();
   }
   
-  // Set up event handlers
-  function setupEventHandlers() {
-    // Set up mouse move handler
-    mouseMoveHandler = (e: MouseEvent) => {
-      // Update cursor position
-      cursorPosition.x = e.clientX;
-      cursorPosition.y = e.clientY;
-      
-      // Update cursor overlay position
-      if (cursorOverlay && settings.enableMouseTracking) {
-        cursorOverlay.style.left = `${cursorPosition.x}px`;
-        cursorOverlay.style.top = `${cursorPosition.y}px`;
-      }
-      
-      // Update dwell indicator position
-      if (dwellIndicator && settings.enableDwellClicking) {
-        dwellIndicator.style.left = `${cursorPosition.x}px`;
-        dwellIndicator.style.top = `${cursorPosition.y}px`;
-      }
-      
-      // Handle dwell clicking
-      if (settings.enableDwellClicking) {
-        handleDwellClicking(e);
-      }
-    };
+  // Apply current settings
+  function applySettings() {
+    // Dwell clicking
+    if (settings.dwellClickingEnabled) {
+      enableDwellClicking();
+    } else {
+      disableDwellClicking();
+    }
     
-    // Set up keyboard handler
-    keyboardHandler = (e: KeyboardEvent) => {
-      // Handle keyboard navigation
-      if (settings.enhanceKeyboardNavigation) {
-        handleKeyboardNavigation(e);
-      }
-      
-      // Alt+M to toggle control panel
+    // Keyboard navigation
+    if (settings.keyboardNavigationEnabled) {
+      enableKeyboardNavigation();
+    } else {
+      disableKeyboardNavigation();
+    }
+    
+    // Highlight clickable elements
+    if (settings.showClickableElements) {
+      highlightClickableElements();
+    } else {
+      clearElementHighlights();
+    }
+  }
+  
+  // Set up event listeners
+  function setupEventListeners() {
+    // Setup keyboard shortcut
+    document.addEventListener('keydown', (e) => {
+      // Alt+M: Toggle motor settings panel
       if (e.altKey && e.key === 'm') {
         e.preventDefault();
         toggleControlPanel();
       }
-    };
+      
+      // Alt+D: Toggle dwell clicking
+      if (e.altKey && e.key === 'd') {
+        e.preventDefault();
+        settings.dwellClickingEnabled = !settings.dwellClickingEnabled;
+        applySettings();
+        saveSettings();
+      }
+      
+      // Alt+K: Toggle keyboard navigation
+      if (e.altKey && e.key === 'k') {
+        e.preventDefault();
+        settings.keyboardNavigationEnabled = !settings.keyboardNavigationEnabled;
+        applySettings();
+        saveSettings();
+      }
+      
+      // Alt+H: Toggle highlight clickable elements
+      if (e.altKey && e.key === 'h') {
+        e.preventDefault();
+        settings.showClickableElements = !settings.showClickableElements;
+        applySettings();
+        saveSettings();
+      }
+    });
+  }
+  
+  // Initialize features based on settings
+  function initializeFeatures() {
+    if (settings.dwellClickingEnabled) {
+      enableDwellClicking();
+    }
     
-    // Add event listeners
-    document.addEventListener('mousemove', mouseMoveHandler);
-    document.addEventListener('keydown', keyboardHandler);
+    if (settings.keyboardNavigationEnabled) {
+      enableKeyboardNavigation();
+    }
+    
+    if (settings.showClickableElements) {
+      highlightClickableElements();
+    }
   }
   
   // Enable dwell clicking
   function enableDwellClicking() {
-    if (cursorOverlay) {
-      cursorOverlay.style.display = 'block';
+    // If already active, do nothing
+    if (dwellState.isActive) {
+      return;
     }
     
+    // Create mouse move handler
+    mouseMoveHandler = (e: MouseEvent) => {
+      if (!dwellIndicator) return;
+      
+      const x = e.clientX;
+      const y = e.clientY;
+      
+      // Position the dwell indicator
+      dwellIndicator.style.display = 'block';
+      dwellIndicator.style.left = `${x - 15}px`;
+      dwellIndicator.style.top = `${y - 15}px`;
+      
+      // Get element under cursor
+      const element = document.elementFromPoint(x, y) as HTMLElement;
+      
+      // Check if the element has changed
+      if (element !== dwellState.element) {
+        // Reset dwell timer
+        if (dwellState.timer !== null) {
+          clearTimeout(dwellState.timer);
+          resetDwellAnimation();
+        }
+        
+        // Set new element
+        dwellState.element = element;
+        
+        // Check if the element is clickable
+        if (isClickableElement(element)) {
+          dwellState.startTime = Date.now();
+          
+          // Start dwell animation
+          startDwellAnimation();
+          
+          // Start dwell timer
+          dwellState.timer = window.setTimeout(() => {
+            // Trigger click
+            if (element) {
+              element.click();
+              
+              // Visual feedback for click
+              const feedback = document.createElement('div');
+              feedback.style.position = 'absolute';
+              feedback.style.left = `${x - 25}px`;
+              feedback.style.top = `${y - 25}px`;
+              feedback.style.width = '50px';
+              feedback.style.height = '50px';
+              feedback.style.borderRadius = '50%';
+              feedback.style.backgroundColor = 'rgba(52, 152, 219, 0.3)';
+              feedback.style.zIndex = '10001';
+              feedback.style.pointerEvents = 'none';
+              feedback.style.animation = 'accessibility-assistant-click-feedback 0.5s ease-out forwards';
+              
+              document.body.appendChild(feedback);
+              
+              // Remove feedback element after animation
+              setTimeout(() => {
+                document.body.removeChild(feedback);
+              }, 500);
+              
+              // Reset dwell state
+              resetDwellAnimation();
+            }
+          }, settings.dwellTime);
+        }
+      }
+    };
+    
+    // Add mouse move event listener
+    document.addEventListener('mousemove', mouseMoveHandler);
+    
+    // Create dwell animation styles
+    const styleElement = document.createElement('style');
+    styleElement.id = 'accessibility-assistant-dwell-styles';
+    styleElement.textContent = `
+      @keyframes accessibility-assistant-dwell-animation {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+      
+      @keyframes accessibility-assistant-click-feedback {
+        0% {
+          transform: scale(0);
+          opacity: 1;
+        }
+        100% {
+          transform: scale(1);
+          opacity: 0;
+        }
+      }
+    `;
+    document.head.appendChild(styleElement);
+    
+    dwellState.isActive = true;
+  }
+  
+  // Start dwell animation
+  function startDwellAnimation() {
     if (dwellIndicator) {
-      dwellIndicator.style.display = 'none'; // Only show during actual dwell
+      dwellIndicator.style.animation = `accessibility-assistant-dwell-animation ${settings.dwellTime / 1000}s linear`;
+    }
+  }
+  
+  // Reset dwell animation
+  function resetDwellAnimation() {
+    if (dwellIndicator) {
+      dwellIndicator.style.animation = 'none';
+      // Trigger reflow
+      void dwellIndicator.offsetWidth;
+    }
+    
+    dwellState.startTime = null;
+    
+    if (dwellState.timer !== null) {
+      clearTimeout(dwellState.timer);
+      dwellState.timer = null;
     }
   }
   
   // Disable dwell clicking
   function disableDwellClicking() {
+    // If not active, do nothing
+    if (!dwellState.isActive) {
+      return;
+    }
+    
+    // Remove event listener
+    if (mouseMoveHandler) {
+      document.removeEventListener('mousemove', mouseMoveHandler);
+      mouseMoveHandler = null;
+    }
+    
+    // Hide dwell indicator
     if (dwellIndicator) {
       dwellIndicator.style.display = 'none';
     }
     
-    // Clear any existing dwell timer
-    if (dwellTimer) {
-      clearTimeout(dwellTimer);
-      dwellTimer = null;
+    // Reset state
+    if (dwellState.timer !== null) {
+      clearTimeout(dwellState.timer);
+      dwellState.timer = null;
     }
     
-    // Hide cursor overlay if mouse tracking is also disabled
-    if (cursorOverlay && !settings.enableMouseTracking) {
-      cursorOverlay.style.display = 'none';
+    dwellState.element = null;
+    dwellState.startTime = null;
+    dwellState.isActive = false;
+    
+    // Remove styles
+    const styleElement = document.getElementById('accessibility-assistant-dwell-styles');
+    if (styleElement && styleElement.parentNode) {
+      styleElement.parentNode.removeChild(styleElement);
     }
   }
   
-  // Handle dwell clicking logic
-  function handleDwellClicking(e: MouseEvent) {
-    // Get element under cursor
-    const element = document.elementFromPoint(cursorPosition.x, cursorPosition.y) as HTMLElement;
+  // Check if element is clickable
+  function isClickableElement(element: HTMLElement | null): boolean {
+    if (!element) return false;
     
-    // If cursor moved to a different element, reset dwell timer
-    if (element !== currentHoverElement) {
-      if (dwellTimer) {
-        clearTimeout(dwellTimer);
-        dwellTimer = null;
-      }
-      
-      if (dwellIndicator) {
-        dwellIndicator.style.display = 'none';
-      }
-      
-      currentHoverElement = element;
-      
-      // Only start timer for clickable elements
-      if (element && isClickable(element)) {
-        if (dwellIndicator) {
-          dwellIndicator.style.display = 'block';
-        }
-        
-        dwellTimer = setTimeout(() => {
-          // Perform click
-          element.click();
-          
-          // Hide indicator after click
-          if (dwellIndicator) {
-            dwellIndicator.style.display = 'none';
-          }
-          
-          // Reset timer
-          dwellTimer = null;
-        }, settings.dwellTime);
-      }
-    }
-  }
-  
-  // Enable mouse tracking
-  function enableMouseTracking() {
-    if (cursorOverlay) {
-      cursorOverlay.style.display = 'block';
-    }
-  }
-  
-  // Disable mouse tracking
-  function disableMouseTracking() {
-    // Hide cursor overlay if dwell clicking is also disabled
-    if (cursorOverlay && !settings.enableDwellClicking) {
-      cursorOverlay.style.display = 'none';
-    }
-  }
-  
-  // Enhance keyboard navigation
-  function enhanceKeyboardNavigation() {
-    // Create keyboard navigation indicator if it doesn't exist
-    if (!keyboardNavigationIndicator) {
-      keyboardNavigationIndicator = document.createElement('div');
-      keyboardNavigationIndicator.id = 'accessibility-assistant-keyboard-indicator';
-      keyboardNavigationIndicator.style.position = 'fixed';
-      keyboardNavigationIndicator.style.pointerEvents = 'none';
-      keyboardNavigationIndicator.style.zIndex = '9998';
-      keyboardNavigationIndicator.style.border = '2px solid #0078FF';
-      keyboardNavigationIndicator.style.borderRadius = '3px';
-      keyboardNavigationIndicator.style.display = 'none';
-      document.body.appendChild(keyboardNavigationIndicator);
-    }
-    
-    // Add tabindex to clickable elements that don't have one
-    const clickableElements = document.querySelectorAll('a, button, [role="button"], input, select, textarea');
-    clickableElements.forEach((element) => {
-      if (!element.hasAttribute('tabindex') && isElementVisible(element as HTMLElement)) {
-        element.setAttribute('tabindex', '0');
-      }
-    });
-    
-    // Add event listener for focus to update the indicator
-    document.addEventListener('focus', (e) => {
-      const target = e.target as HTMLElement;
-      updateKeyboardNavigationIndicator(target);
-    }, true);
-  }
-  
-  // Disable keyboard navigation enhancements
-  function disableKeyboardNavigation() {
-    // Hide keyboard navigation indicator
-    if (keyboardNavigationIndicator) {
-      keyboardNavigationIndicator.style.display = 'none';
-    }
-  }
-  
-  // Update keyboard navigation indicator position
-  function updateKeyboardNavigationIndicator(element: HTMLElement) {
-    if (!keyboardNavigationIndicator || !element) return;
-    
-    // Get element dimensions and position
-    const rect = element.getBoundingClientRect();
-    
-    // Update indicator position
-    keyboardNavigationIndicator.style.left = `${rect.left - 3}px`;
-    keyboardNavigationIndicator.style.top = `${rect.top - 3}px`;
-    keyboardNavigationIndicator.style.width = `${rect.width + 6}px`;
-    keyboardNavigationIndicator.style.height = `${rect.height + 6}px`;
-    keyboardNavigationIndicator.style.display = 'block';
-    
-    // Store current focused element
-    keyboardFocusedElement = element;
-  }
-  
-  // Handle keyboard navigation
-  function handleKeyboardNavigation(e: KeyboardEvent) {
-    // Enter keyboard navigation mode with Tab key
-    if (e.key === 'Tab') {
-      keyboardNavigationMode = true;
-      
-      // Show keyboard navigation indicator if focused element is valid
-      if (document.activeElement && document.activeElement !== document.body) {
-        updateKeyboardNavigationIndicator(document.activeElement as HTMLElement);
-      }
-    }
-    
-    // Space or Enter to click in keyboard navigation mode
-    if (keyboardNavigationMode && (e.key === ' ' || e.key === 'Enter') && keyboardFocusedElement) {
-      // Don't interfere with inputs, textareas, etc.
-      const tag = keyboardFocusedElement.tagName.toLowerCase();
-      if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') {
-        e.preventDefault();
-        keyboardFocusedElement.click();
-      }
-    }
-    
-    // Escape to exit keyboard navigation mode
-    if (e.key === 'Escape') {
-      keyboardNavigationMode = false;
-      if (keyboardNavigationIndicator) {
-        keyboardNavigationIndicator.style.display = 'none';
-      }
-    }
-  }
-  
-  // Highlight clickable elements
-  function highlightClickableElements() {
-    // Create a style element if it doesn't exist
-    let styleElement = document.getElementById('accessibility-assistant-clickable-highlight') as HTMLStyleElement;
-    if (!styleElement) {
-      styleElement = document.createElement('style');
-      styleElement.id = 'accessibility-assistant-clickable-highlight';
-      document.head.appendChild(styleElement);
-    }
-    
-    // Add CSS to highlight clickable elements
-    styleElement.textContent = `
-      a, button, [role="button"], input[type="submit"], input[type="button"], [tabindex]:not([tabindex="-1"]) {
-        outline: 2px solid rgba(0, 120, 255, 0.5) !important;
-        outline-offset: 2px !important;
-      }
-      
-      a:hover, button:hover, [role="button"]:hover, input[type="submit"]:hover, input[type="button"]:hover, [tabindex]:not([tabindex="-1"]):hover {
-        outline: 2px solid rgba(0, 120, 255, 0.8) !important;
-        outline-offset: 2px !important;
-      }
-    `;
-  }
-  
-  // Remove highlighting from clickable elements
-  function unhighlightClickableElements() {
-    const styleElement = document.getElementById('accessibility-assistant-clickable-highlight');
-    if (styleElement) {
-      styleElement.remove();
-    }
-  }
-  
-  // Enhance form controls
-  function enhanceFormControls() {
-    // Add support for autocomplete
-    const formFields = document.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"], input[type="password"], textarea');
-    
-    formFields.forEach((field) => {
-      // Add autocomplete if not already set
-      if (!field.hasAttribute('autocomplete')) {
-        // Try to guess autocomplete type from field name or id
-        const name = field.getAttribute('name')?.toLowerCase() || '';
-        const id = field.getAttribute('id')?.toLowerCase() || '';
-        const type = field.getAttribute('type')?.toLowerCase() || '';
-        
-        if (name.includes('email') || id.includes('email') || type === 'email') {
-          field.setAttribute('autocomplete', 'email');
-        } else if (name.includes('name') || id.includes('name')) {
-          if (name.includes('first') || id.includes('first')) {
-            field.setAttribute('autocomplete', 'given-name');
-          } else if (name.includes('last') || id.includes('last')) {
-            field.setAttribute('autocomplete', 'family-name');
-          } else {
-            field.setAttribute('autocomplete', 'name');
-          }
-        } else if (name.includes('phone') || id.includes('phone') || type === 'tel') {
-          field.setAttribute('autocomplete', 'tel');
-        } else if (name.includes('address') || id.includes('address')) {
-          field.setAttribute('autocomplete', 'street-address');
-        } else if (name.includes('city') || id.includes('city')) {
-          field.setAttribute('autocomplete', 'address-level2');
-        } else if (name.includes('zip') || id.includes('zip') || name.includes('postal') || id.includes('postal')) {
-          field.setAttribute('autocomplete', 'postal-code');
-        } else if (name.includes('country') || id.includes('country')) {
-          field.setAttribute('autocomplete', 'country');
-        } else {
-          field.setAttribute('autocomplete', 'on');
-        }
-      }
-    });
-  }
-  
-  // Check if an element is clickable
-  function isClickable(element: HTMLElement): boolean {
-    // Check for standard clickable elements
-    const clickableTagNames = ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'];
-    if (clickableTagNames.includes(element.tagName)) {
+    // Check tag name
+    const clickableTags = ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'];
+    if (clickableTags.includes(element.tagName)) {
       return true;
     }
     
-    // Check for role="button"
-    if (element.getAttribute('role') === 'button') {
+    // Check for role attribute
+    const clickableRoles = ['button', 'link', 'checkbox', 'radio', 'tab', 'menuitem'];
+    const role = element.getAttribute('role');
+    if (role && clickableRoles.includes(role)) {
       return true;
     }
     
-    // Check for elements with click event handlers
-    if (element.onclick || element.getAttribute('onclick')) {
-      return true;
-    }
-    
-    // Check for elements with cursor: pointer style
+    // Check for pointer cursor
     const computedStyle = window.getComputedStyle(element);
     if (computedStyle.cursor === 'pointer') {
       return true;
     }
     
-    // Check for elements with tabindex
-    if (element.hasAttribute('tabindex') && element.getAttribute('tabindex') !== '-1') {
-      return true;
+    // Check for parent elements that might be clickable
+    let parent = element.parentElement;
+    let depth = 0;
+    const maxDepth = 3; // Limit how far up the DOM we check
+    
+    while (parent && depth < maxDepth) {
+      if (isClickableElement(parent)) {
+        return true;
+      }
+      parent = parent.parentElement;
+      depth++;
     }
     
     return false;
   }
   
-  // Check if an element is visible
-  function isElementVisible(element: HTMLElement): boolean {
-    const style = window.getComputedStyle(element);
+  // Enable keyboard navigation
+  function enableKeyboardNavigation() {
+    // Scan for navigable elements
+    scanNavigableElements();
     
-    return style.display !== 'none' &&
-           style.visibility !== 'hidden' &&
-           style.opacity !== '0' &&
-           element.offsetWidth > 0 &&
-           element.offsetHeight > 0;
+    // Create keyboard handler
+    keyboardHandler = (e: KeyboardEvent) => {
+      // If no control panel or other essential UI elements are active
+      if (!controlPanel || controlPanel.style.display === 'none') {
+        // Tab navigation is handled by browser
+        
+        // Arrow key navigation for highlighted elements
+        if (settings.showClickableElements) {
+          // Only handle arrow keys if clickable elements are highlighted
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            navigateToNextElement();
+          } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            navigateToPreviousElement();
+          } else if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activateCurrentElement();
+          }
+        }
+      }
+    };
+    
+    // Add keyboard event listener
+    document.addEventListener('keydown', keyboardHandler);
+    
+    // Add custom visible focus indicator styles
+    const styleElement = document.createElement('style');
+    styleElement.id = 'accessibility-assistant-keyboard-nav-styles';
+    styleElement.textContent = `
+      .accessibility-assistant-keyboard-focus {
+        outline: 3px solid #2980b9 !important;
+        outline-offset: 2px !important;
+      }
+    `;
+    document.head.appendChild(styleElement);
   }
   
-  // Toggle dwell clicking
-  function toggleDwellClicking() {
-    settings.enableDwellClicking = !settings.enableDwellClicking;
-    applySettings();
-    saveSettings();
+  // Disable keyboard navigation
+  function disableKeyboardNavigation() {
+    // Remove event listener
+    if (keyboardHandler) {
+      document.removeEventListener('keydown', keyboardHandler);
+      keyboardHandler = null;
+    }
+    
+    // Remove custom focus styles
+    const styleElement = document.getElementById('accessibility-assistant-keyboard-nav-styles');
+    if (styleElement && styleElement.parentNode) {
+      styleElement.parentNode.removeChild(styleElement);
+    }
+    
+    // Remove focus from currently highlighted element
+    const focusedElement = document.querySelector('.accessibility-assistant-keyboard-focus');
+    if (focusedElement) {
+      focusedElement.classList.remove('accessibility-assistant-keyboard-focus');
+    }
   }
   
-  // Toggle mouse tracking
-  function toggleMouseTracking() {
-    settings.enableMouseTracking = !settings.enableMouseTracking;
-    applySettings();
-    saveSettings();
+  // Scan the page for navigable elements
+  function scanNavigableElements() {
+    clickableElements = [];
+    currentElementIndex = -1;
+    
+    // Find all links and buttons
+    const links = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"]'));
+    
+    // Find all inputs, selects, textareas
+    const inputs = Array.from(document.querySelectorAll('input, select, textarea'));
+    
+    // Find elements with click handlers (using cursor: pointer as a proxy)
+    const clickables = Array.from(document.querySelectorAll('*')).filter(el => {
+      const computedStyle = window.getComputedStyle(el);
+      return computedStyle.cursor === 'pointer';
+    });
+    
+    // Combine and deduplicate
+    const allElements = [...new Set([...links, ...inputs, ...clickables])];
+    
+    // Filter out invisible elements
+    const visibleElements = allElements.filter(el => {
+      const rect = el.getBoundingClientRect();
+      const isVisible = rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).visibility !== 'hidden';
+      return isVisible;
+    }) as HTMLElement[];
+    
+    // Convert to NavigableElement format
+    clickableElements = visibleElements.map(el => {
+      return {
+        element: el,
+        role: el.getAttribute('role') || el.tagName.toLowerCase(),
+        label: getElementLabel(el),
+        rect: el.getBoundingClientRect(),
+        tabIndex: el.tabIndex,
+        isClickable: isClickableElement(el)
+      };
+    });
   }
   
-  // Toggle keyboard navigation enhancement
-  function toggleKeyboardNavigation() {
-    settings.enhanceKeyboardNavigation = !settings.enhanceKeyboardNavigation;
-    applySettings();
-    saveSettings();
+  // Get element label (for accessibility)
+  function getElementLabel(element: HTMLElement): string {
+    // Check aria-label
+    let label = element.getAttribute('aria-label');
+    if (label) return label;
+    
+    // Check aria-labelledby
+    const labelledBy = element.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const labelElement = document.getElementById(labelledBy);
+      if (labelElement) return labelElement.textContent || '';
+    }
+    
+    // Check for label element (for form controls)
+    if (element.id) {
+      const labelElement = document.querySelector(`label[for="${element.id}"]`);
+      if (labelElement) return labelElement.textContent || '';
+    }
+    
+    // Use text content or value for form elements
+    if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) {
+      return element.value || element.placeholder || '';
+    }
+    
+    // Use text content
+    return element.textContent?.trim() || '';
+  }
+  
+  // Navigate to the next element in the clickable elements list
+  function navigateToNextElement() {
+    if (clickableElements.length === 0) return;
+    
+    // Remove focus from current element
+    if (currentElementIndex >= 0 && currentElementIndex < clickableElements.length) {
+      clickableElements[currentElementIndex].element.classList.remove('accessibility-assistant-keyboard-focus');
+    }
+    
+    // Move to next element
+    currentElementIndex = (currentElementIndex + 1) % clickableElements.length;
+    
+    // Focus new element
+    const element = clickableElements[currentElementIndex].element;
+    element.classList.add('accessibility-assistant-keyboard-focus');
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  
+  // Navigate to the previous element in the clickable elements list
+  function navigateToPreviousElement() {
+    if (clickableElements.length === 0) return;
+    
+    // Remove focus from current element
+    if (currentElementIndex >= 0 && currentElementIndex < clickableElements.length) {
+      clickableElements[currentElementIndex].element.classList.remove('accessibility-assistant-keyboard-focus');
+    }
+    
+    // Move to previous element
+    currentElementIndex = (currentElementIndex - 1 + clickableElements.length) % clickableElements.length;
+    
+    // Focus new element
+    const element = clickableElements[currentElementIndex].element;
+    element.classList.add('accessibility-assistant-keyboard-focus');
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  
+  // Activate (click) the current element
+  function activateCurrentElement() {
+    if (currentElementIndex >= 0 && currentElementIndex < clickableElements.length) {
+      const element = clickableElements[currentElementIndex].element;
+      element.click();
+    }
+  }
+  
+  // Highlight clickable elements on the page
+  function highlightClickableElements() {
+    // Scan for clickable elements
+    scanNavigableElements();
+    
+    // Clear existing highlights
+    clearElementHighlights();
+    
+    // Create highlights for each clickable element
+    clickableElements.forEach((item, index) => {
+      const element = item.element;
+      const rect = element.getBoundingClientRect();
+      const highlight = document.createElement('div');
+      
+      highlight.className = 'accessibility-assistant-element-highlight';
+      highlight.style.position = 'absolute';
+      highlight.style.left = `${rect.left + window.scrollX}px`;
+      highlight.style.top = `${rect.top + window.scrollY}px`;
+      highlight.style.width = `${rect.width}px`;
+      highlight.style.height = `${rect.height}px`;
+      highlight.style.border = '2px solid #2ecc71';
+      highlight.style.borderRadius = '3px';
+      highlight.style.zIndex = '9998';
+      highlight.style.pointerEvents = 'none';
+      highlight.style.boxSizing = 'border-box';
+      
+      // Add number badge for keyboard navigation
+      const badge = document.createElement('div');
+      badge.className = 'accessibility-assistant-element-badge';
+      badge.style.position = 'absolute';
+      badge.style.top = '0';
+      badge.style.left = '0';
+      badge.style.backgroundColor = '#2ecc71';
+      badge.style.color = 'white';
+      badge.style.padding = '2px 5px';
+      badge.style.fontSize = '10px';
+      badge.style.fontWeight = 'bold';
+      badge.style.borderRadius = '3px';
+      badge.style.transform = 'translate(-50%, -50%)';
+      badge.textContent = (index + 1).toString();
+      
+      highlight.appendChild(badge);
+      
+      highlightOverlay?.appendChild(highlight);
+    });
+    
+    // Update on scroll
+    window.addEventListener('scroll', updateHighlightPositions);
+    window.addEventListener('resize', updateHighlightPositions);
+  }
+  
+  // Update positions of all highlights
+  function updateHighlightPositions() {
+    const highlights = document.querySelectorAll('.accessibility-assistant-element-highlight');
+    
+    highlights.forEach((highlight, index) => {
+      if (index < clickableElements.length) {
+        const element = clickableElements[index].element;
+        const rect = element.getBoundingClientRect();
+        
+        (highlight as HTMLElement).style.left = `${rect.left + window.scrollX}px`;
+        (highlight as HTMLElement).style.top = `${rect.top + window.scrollY}px`;
+        (highlight as HTMLElement).style.width = `${rect.width}px`;
+        (highlight as HTMLElement).style.height = `${rect.height}px`;
+      }
+    });
+  }
+  
+  // Clear all element highlights
+  function clearElementHighlights() {
+    // Remove highlights
+    const highlights = document.querySelectorAll('.accessibility-assistant-element-highlight');
+    highlights.forEach(highlight => {
+      highlight.parentNode?.removeChild(highlight);
+    });
+    
+    // Remove event listeners
+    window.removeEventListener('scroll', updateHighlightPositions);
+    window.removeEventListener('resize', updateHighlightPositions);
   }
   
   // Clean up resources
   function cleanup() {
-    // Remove event listeners
-    if (mouseMoveHandler) {
-      document.removeEventListener('mousemove', mouseMoveHandler);
-    }
-    
-    if (keyboardHandler) {
-      document.removeEventListener('keydown', keyboardHandler);
-    }
+    // Disable features
+    disableDwellClicking();
+    disableKeyboardNavigation();
+    clearElementHighlights();
     
     // Remove UI elements
-    if (cursorOverlay && cursorOverlay.parentNode) {
-      cursorOverlay.parentNode.removeChild(cursorOverlay);
+    if (controlPanel && controlPanel.parentNode) {
+      controlPanel.parentNode.removeChild(controlPanel);
     }
     
     if (dwellIndicator && dwellIndicator.parentNode) {
       dwellIndicator.parentNode.removeChild(dwellIndicator);
     }
     
-    if (keyboardNavigationIndicator && keyboardNavigationIndicator.parentNode) {
-      keyboardNavigationIndicator.parentNode.removeChild(keyboardNavigationIndicator);
-    }
-    
-    if (controlPanel && controlPanel.parentNode) {
-      controlPanel.parentNode.removeChild(controlPanel);
-    }
-    
-    // Remove clickable elements highlighting
-    unhighlightClickableElements();
-    
-    // Clear any existing dwell timer
-    if (dwellTimer) {
-      clearTimeout(dwellTimer);
-      dwellTimer = null;
+    if (highlightOverlay && highlightOverlay.parentNode) {
+      highlightOverlay.parentNode.removeChild(highlightOverlay);
     }
   }
   
-  // Initialize
+  // Initialize motor assistant
   initialize();
   
   // Return public API
@@ -757,11 +874,31 @@ export function createMotorAssistant(options: Partial<MotorAssistantSettings> = 
     showControlPanel,
     hideControlPanel,
     toggleControlPanel,
-    toggleDwellClicking,
-    toggleMouseTracking,
-    toggleKeyboardNavigation,
+    enableDwellClicking,
+    disableDwellClicking,
+    toggleDwellClicking: () => {
+      settings.dwellClickingEnabled = !settings.dwellClickingEnabled;
+      applySettings();
+      saveSettings();
+    },
+    enableKeyboardNavigation,
+    disableKeyboardNavigation,
+    toggleKeyboardNavigation: () => {
+      settings.keyboardNavigationEnabled = !settings.keyboardNavigationEnabled;
+      applySettings();
+      saveSettings();
+    },
+    highlightClickableElements,
+    clearElementHighlights,
+    toggleElementHighlights: () => {
+      settings.showClickableElements = !settings.showClickableElements;
+      applySettings();
+      saveSettings();
+    },
+    resetToDefaults,
+    applySettings,
     cleanup
   };
 }
 
-export default createMotorAssistant; 
+export default createMotorAssistant;

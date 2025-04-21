@@ -1,74 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { getCurrentUserProfile } from '../services/userService';
-import { getAccessibilitySettings } from '../services/settingsService';
-import { UserProfile, UsageStatistics } from '../database/schema';
+import { getCurrentUserProfile, getActiveAccessibilityProfile } from '../services/userService';
+import { getCurrentUserSettings } from '../services/settingsService';
+import { getUserStatisticsSummary, getFeatureRecommendations, syncStatsFromExtension } from '../services/statisticsService';
+import { UserProfile, UserAccessibilityProfile } from '../database/schema';
+import ProfileSwitcher from '../components/profile/ProfileSwitcher';
+import { useAuth } from '../contexts/AuthContext';
 
-// Placeholder service - would be implemented with real API calls
-const getUserStats = async (userId: string): Promise<UsageStatistics> => {
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 700));
-  
-  return {
-    userId,
-    activeSessionsCount: 5,
-    totalSessionsCount: 28,
-    totalUsageTimeMinutes: 346,
-    lastActiveDate: new Date().toISOString(),
-    featureUsageCount: {
-      screenReader: 12,
-      voiceCommands: 35,
-      keyboardNavigation: 78,
-      visualAdjustments: 16,
-      automaticCaptions: 5
-    },
-    weeklyActivitySummary: [
-      { date: '2023-06-01', minutes: 45 },
-      { date: '2023-06-02', minutes: 32 },
-      { date: '2023-06-03', minutes: 0 },
-      { date: '2023-06-04', minutes: 12 },
-      { date: '2023-06-05', minutes: 65 },
-      { date: '2023-06-06', minutes: 28 },
-      { date: '2023-06-07', minutes: 15 }
-    ]
-  };
+// Helper function for formatting time
+const formatTime = (minutes: number): string => {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours}h ${mins}m`;
 };
 
-// Placeholder for site recommendations based on user settings
-const getSiteRecommendations = async (userId: string) => {
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 500));
-  
-  return [
-    {
-      id: 'rec1',
-      title: 'News site accessibility',
-      description: 'Based on your visual settings, we recommend enabling high contrast mode on news sites',
-      siteType: 'news',
-      priority: 'high'
-    },
-    {
-      id: 'rec2',
-      title: 'E-commerce navigation',
-      description: 'Try voice commands for easier navigation on shopping sites',
-      siteType: 'shopping',
-      priority: 'medium'
-    },
-    {
-      id: 'rec3',
-      title: 'Video content',
-      description: 'Enable automatic captions for better comprehension of video content',
-      siteType: 'video',
-      priority: 'high'
-    }
-  ];
+// Helper function to format feature names for display
+const formatFeatureName = (name: string): string => {
+  return name
+    .replace(/([A-Z])/g, ' $1') // Add space before capital letters
+    .replace(/^./, (str) => str.toUpperCase()) // Capitalize first letter
+    .trim();
 };
 
 const Dashboard: React.FC = () => {
+  const { user } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [settings, setSettings] = useState(null);
-  const [stats, setStats] = useState<UsageStatistics | null>(null);
-  const [recommendations, setRecommendations] = useState([]);
+  const [usageSummary, setUsageSummary] = useState<any>(null);
+  const [recommendations, setRecommendations] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeAccessibilityProfile, setActiveAccessibilityProfile] = useState<UserAccessibilityProfile | null>(null);
+  const [syncingStats, setSyncingStats] = useState(false);
 
   useEffect(() => {
     const loadDashboardData = async () => {
@@ -77,16 +38,25 @@ const Dashboard: React.FC = () => {
         const userProfile = await getCurrentUserProfile();
         setProfile(userProfile);
         
+        if (!userProfile) {
+          setIsLoading(false);
+          return;
+        }
+        
+        // Get active accessibility profile
+        const activeProfile = await getActiveAccessibilityProfile(userProfile.id);
+        setActiveAccessibilityProfile(activeProfile);
+        
         // Get settings and stats in parallel
-        const [userSettings, userStats, siteRecs] = await Promise.all([
-          getAccessibilitySettings(userProfile.id),
-          getUserStats(userProfile.id),
-          getSiteRecommendations(userProfile.id)
+        const [userSettings, statsSummary, featureRecs] = await Promise.all([
+          getCurrentUserSettings(),
+          getUserStatisticsSummary(userProfile.id),
+          getFeatureRecommendations(userProfile.id)
         ]);
         
         setSettings(userSettings);
-        setStats(userStats);
-        setRecommendations(siteRecs);
+        setUsageSummary(statsSummary);
+        setRecommendations(featureRecs);
       } catch (error) {
         console.error('Error loading dashboard data:', error);
       } finally {
@@ -97,15 +67,40 @@ const Dashboard: React.FC = () => {
     loadDashboardData();
   }, []);
 
+  // Handle profile change
+  const handleProfileChange = (profile: UserAccessibilityProfile) => {
+    setActiveAccessibilityProfile(profile);
+    // In a real application, we would apply the settings from this profile
+    console.log(`Applying settings from profile: ${profile.name}`);
+  };
+  
+  // Handle syncing stats from extension
+  const handleSyncStats = async () => {
+    setSyncingStats(true);
+    try {
+      await syncStatsFromExtension();
+      
+      // Reload usage summary
+      if (profile) {
+        const statsSummary = await getUserStatisticsSummary(profile.id);
+        setUsageSummary(statsSummary);
+      }
+    } catch (error) {
+      console.error('Error syncing stats:', error);
+    } finally {
+      setSyncingStats(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
-        <p className="text-lg text-gray-600">Loading dashboard...</p>
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
       </div>
     );
   }
 
-  if (!profile || !stats) {
+  if (!profile || !usageSummary) {
     return (
       <div className="flex flex-col justify-center items-center min-h-screen">
         <p className="text-lg text-red-600">Could not load dashboard data</p>
@@ -119,32 +114,77 @@ const Dashboard: React.FC = () => {
     );
   }
 
+  // Calculate feature usage percentages for display
+  const featureUsageData = usageSummary.featuresUsed || [];
+  
+  // Create weekly activity data
+  const today = new Date();
+  const weeklyActivity = [];
+  for (let i = 6; i >= 0; i--) {
+    const date = new Date(today);
+    date.setDate(date.getDate() - i);
+    
+    // For this example, we'll just generate random data
+    // In a real app, this would come from the usage stats
+    const randomMinutes = Math.floor(Math.random() * 70);
+    
+    weeklyActivity.push({
+      date: date.toISOString().split('T')[0],
+      minutes: randomMinutes,
+      day: date.toLocaleDateString(undefined, { weekday: 'short' }).charAt(0)
+    });
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Welcome Header */}
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-          <div className="flex items-center">
-            {profile.profilePicture ? (
-              <img 
-                src={profile.profilePicture} 
-                alt={profile.name} 
-                className="h-16 w-16 rounded-full mr-4 object-cover"
-              />
-            ) : (
-              <div className="h-16 w-16 rounded-full bg-blue-100 flex items-center justify-center mr-4">
-                <span className="text-blue-800 text-xl font-medium">
-                  {profile.name.charAt(0).toUpperCase()}
-                </span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              {profile.profilePicture ? (
+                <img 
+                  src={profile.profilePicture} 
+                  alt={profile.name} 
+                  className="h-16 w-16 rounded-full mr-4 object-cover"
+                />
+              ) : (
+                <div className="h-16 w-16 rounded-full bg-blue-100 flex items-center justify-center mr-4">
+                  <span className="text-blue-800 text-xl font-medium">
+                    {profile.name.charAt(0).toUpperCase()}
+                  </span>
+                </div>
+              )}
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">Welcome back, {profile.name.split(' ')[0]}!</h1>
+                <p className="text-gray-600">
+                  Last login: {new Date(profile.lastLoginAt).toLocaleDateString()}
+                </p>
               </div>
-            )}
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Welcome back, {profile.name.split(' ')[0]}!</h1>
-              <p className="text-gray-600">
-                Last login: {new Date(profile.lastLoginAt).toLocaleDateString()}
-              </p>
             </div>
+            <button
+              onClick={handleSyncStats}
+              disabled={syncingStats}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50 flex items-center"
+            >
+              {syncingStats ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Syncing...
+                </>
+              ) : (
+                <>
+                  <svg className="h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                  </svg>
+                  Sync with Extension
+                </>
+              )}
+            </button>
           </div>
         </div>
         
@@ -160,21 +200,23 @@ const Dashboard: React.FC = () => {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-blue-50 p-4 rounded-lg">
                   <h3 className="text-sm font-medium text-blue-800">Total Sessions</h3>
-                  <p className="mt-2 text-2xl font-bold text-blue-600">{stats.totalSessionsCount}</p>
+                  <p className="mt-2 text-2xl font-bold text-blue-600">{usageSummary.totalSessions}</p>
                 </div>
                 <div className="bg-green-50 p-4 rounded-lg">
                   <h3 className="text-sm font-medium text-green-800">Total Usage</h3>
                   <p className="mt-2 text-2xl font-bold text-green-600">
-                    {Math.floor(stats.totalUsageTimeMinutes / 60)}h {stats.totalUsageTimeMinutes % 60}m
+                    {formatTime(usageSummary.totalTimeSpent)}
                   </p>
                 </div>
                 <div className="bg-purple-50 p-4 rounded-lg">
-                  <h3 className="text-sm font-medium text-purple-800">Voice Commands</h3>
-                  <p className="mt-2 text-2xl font-bold text-purple-600">{stats.featureUsageCount.voiceCommands}</p>
+                  <h3 className="text-sm font-medium text-purple-800">Top Feature</h3>
+                  <p className="mt-2 text-xl font-bold text-purple-600">
+                    {formatFeatureName(usageSummary.mostUsedFeature)}
+                  </p>
                 </div>
                 <div className="bg-amber-50 p-4 rounded-lg">
-                  <h3 className="text-sm font-medium text-amber-800">Active Today</h3>
-                  <p className="mt-2 text-2xl font-bold text-amber-600">{stats.activeSessionsCount}</p>
+                  <h3 className="text-sm font-medium text-amber-800">Websites Visited</h3>
+                  <p className="mt-2 text-2xl font-bold text-amber-600">{usageSummary.websitesVisited}</p>
                 </div>
               </div>
               
@@ -182,7 +224,7 @@ const Dashboard: React.FC = () => {
                 Weekly Activity
               </h3>
               <div className="h-32 flex items-end space-x-2">
-                {stats.weeklyActivitySummary.map((day) => {
+                {weeklyActivity.map((day) => {
                   const height = day.minutes > 0 
                     ? Math.max(20, (day.minutes / 70) * 100) 
                     : 4;
@@ -193,7 +235,7 @@ const Dashboard: React.FC = () => {
                         style={{ height: `${height}%` }}
                       ></div>
                       <div className="text-xs text-gray-500 mt-1">
-                        {new Date(day.date).toLocaleDateString(undefined, { weekday: 'short' }).charAt(0)}
+                        {day.day}
                       </div>
                     </div>
                   );
@@ -206,50 +248,37 @@ const Dashboard: React.FC = () => {
               <h2 className="text-lg font-semibold text-gray-900 mb-4">
                 Feature Usage
               </h2>
-              <div className="space-y-4">
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700">Screen Reader</span>
-                    <span className="text-sm text-gray-500">{stats.featureUsageCount.screenReader} uses</span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${(stats.featureUsageCount.screenReader / 100) * 100}%` }}></div>
-                  </div>
+              {featureUsageData.length === 0 ? (
+                <div className="py-4 text-center text-gray-500">
+                  <p>No feature usage data available yet.</p>
+                  <p className="text-sm mt-1">Use the extension to start tracking.</p>
                 </div>
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700">Voice Commands</span>
-                    <span className="text-sm text-gray-500">{stats.featureUsageCount.voiceCommands} uses</span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-green-600 h-2 rounded-full" style={{ width: `${(stats.featureUsageCount.voiceCommands / 100) * 100}%` }}></div>
-                  </div>
+              ) : (
+                <div className="space-y-4">
+                  {featureUsageData.slice(0, 5).map((feature) => (
+                    <div key={feature.featureName}>
+                      <div className="flex justify-between mb-1">
+                        <span className="text-sm font-medium text-gray-700">{formatFeatureName(feature.featureName)}</span>
+                        <span className="text-sm text-gray-500">{feature.count} uses</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${Math.min(100, feature.percentage)}%` }}></div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700">Keyboard Navigation</span>
-                    <span className="text-sm text-gray-500">{stats.featureUsageCount.keyboardNavigation} uses</span>
+              )}
+              
+              <div className="mt-8 pt-6 border-t border-gray-200">
+                <h3 className="text-md font-medium text-gray-700 mb-2">Performance Metrics</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-500">Average Response Time</p>
+                    <p className="text-lg font-semibold">{usageSummary.averageResponseTime.toFixed(2)}s</p>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-purple-600 h-2 rounded-full" style={{ width: `${(stats.featureUsageCount.keyboardNavigation / 100) * 100}%` }}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700">Visual Adjustments</span>
-                    <span className="text-sm text-gray-500">{stats.featureUsageCount.visualAdjustments} uses</span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-amber-600 h-2 rounded-full" style={{ width: `${(stats.featureUsageCount.visualAdjustments / 100) * 100}%` }}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700">Automatic Captions</span>
-                    <span className="text-sm text-gray-500">{stats.featureUsageCount.automaticCaptions} uses</span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-red-600 h-2 rounded-full" style={{ width: `${(stats.featureUsageCount.automaticCaptions / 100) * 100}%` }}></div>
+                  <div>
+                    <p className="text-sm text-gray-500">Error Rate</p>
+                    <p className="text-lg font-semibold">{(usageSummary.errorRate * 100).toFixed(1)}%</p>
                   </div>
                 </div>
               </div>
@@ -258,6 +287,9 @@ const Dashboard: React.FC = () => {
           
           {/* Sidebar */}
           <div className="lg:col-span-1 space-y-6">
+            {/* Profile Switcher Component */}
+            <ProfileSwitcher onProfileChange={handleProfileChange} />
+            
             {/* Quick Actions */}
             <div className="bg-white rounded-lg shadow-sm p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">
@@ -289,25 +321,35 @@ const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* Recommendations */}
+            {/* Feature Recommendations */}
             <div className="bg-white rounded-lg shadow-sm p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                Recommendations
+                Recommended Features
               </h2>
-              <div className="space-y-4">
-                {recommendations.map((rec) => (
-                  <div key={rec.id} className="border-l-4 border-blue-500 pl-4 py-2">
-                    <h3 className="font-medium text-gray-900">{rec.title}</h3>
-                    <p className="text-sm text-gray-600 mt-1">{rec.description}</p>
-                    <div className="mt-2">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium 
-                        ${rec.priority === 'high' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                        {rec.priority === 'high' ? 'High Priority' : 'Suggested'}
-                      </span>
+              {recommendations.length === 0 ? (
+                <div className="py-4 text-center text-gray-500">
+                  <p>No personalized recommendations yet.</p>
+                  <p className="text-sm mt-1">Continue using the assistant to get suggestions.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {recommendations.map((feature, index) => (
+                    <div key={index} className="border-l-4 border-blue-500 pl-4 py-2">
+                      <h3 className="font-medium text-gray-900">{formatFeatureName(feature)}</h3>
+                      <p className="text-sm text-gray-600 mt-1">
+                        This feature may improve your accessibility experience.
+                      </p>
+                      <div className="mt-2">
+                        <button 
+                          className="inline-flex items-center px-2.5 py-1.5 border border-transparent text-xs font-medium rounded text-blue-700 bg-blue-100 hover:bg-blue-200 focus:outline-none"
+                        >
+                          Try it now
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
             
             {/* Resources */}
@@ -355,4 +397,4 @@ const Dashboard: React.FC = () => {
   );
 };
 
-export default Dashboard; 
+export default Dashboard;

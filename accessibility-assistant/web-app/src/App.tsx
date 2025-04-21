@@ -3,9 +3,40 @@ import Layout from './components/layout/Layout';
 import Dashboard from './pages/Dashboard';
 import ProfilePage from './pages/ProfilePage';
 import SettingsPage from './pages/SettingsPage';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
-const App: React.FC = () => {
+// Protected route wrapper component
+const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isLoggedIn, loading } = useAuth();
+  
+  // Show loading state while checking authentication
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+  
+  // Redirect to login if not authenticated
+  if (!isLoggedIn) {
+    // Use setTimeout to avoid immediate state change in render
+    setTimeout(() => {
+      window.history.pushState({}, '', '/login');
+      window.dispatchEvent(new Event('popstate'));
+    }, 0);
+    return null;
+  }
+  
+  return <>{children}</>;
+};
+
+// Main App component with routing
+const AppContent: React.FC = () => {
   const [currentPath, setCurrentPath] = useState<string>(window.location.pathname);
+  const { isLoggedIn, logout } = useAuth();
 
   // Handle navigation
   useEffect(() => {
@@ -21,15 +52,36 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Redirect to dashboard if logged in and trying to access auth pages
+  useEffect(() => {
+    if (isLoggedIn && (currentPath === '/login' || currentPath === '/register')) {
+      window.history.pushState({}, '', '/');
+      setCurrentPath('/');
+    }
+  }, [isLoggedIn, currentPath]);
+
   // Simple client-side routing
   const renderContent = () => {
     switch (currentPath) {
       case '/':
-        return <Dashboard />;
+        return <ProtectedRoute><Dashboard /></ProtectedRoute>;
       case '/profile':
-        return <ProfilePage />;
+        return <ProtectedRoute><ProfilePage /></ProtectedRoute>;
       case '/settings':
-        return <SettingsPage />;
+        return <ProtectedRoute><SettingsPage /></ProtectedRoute>;
+      case '/login':
+        return <LoginPage />;
+      case '/register':
+        return <RegisterPage />;
+      case '/logout':
+        // Handle logout
+        logout();
+        // Use setTimeout to avoid immediate state change during render
+        setTimeout(() => {
+          window.history.pushState({}, '', '/login');
+          window.dispatchEvent(new Event('popstate'));
+        }, 0);
+        return <div className="min-h-screen flex items-center justify-center">Logging out...</div>;
       case '/help':
         return (
           <div className="min-h-screen bg-gray-50 py-8">
@@ -99,4 +151,13 @@ const App: React.FC = () => {
   );
 };
 
-export default App; 
+// Wrap the app with AuthProvider
+const App: React.FC = () => {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+};
+
+export default App;

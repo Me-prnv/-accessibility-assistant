@@ -1,31 +1,14 @@
 import React, { useState } from 'react';
-import { getCurrentUserProfile } from '../../services/userService';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface NavigationProps {
   currentPath: string;
 }
 
 const Navigation: React.FC<NavigationProps> = ({ currentPath }) => {
+  const { user, isLoggedIn, logout } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const [userProfile, setUserProfile] = useState<{ name: string; profilePicture?: string } | null>(null);
-
-  // Fetch user profile on component mount
-  React.useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const profile = await getCurrentUserProfile();
-        setUserProfile({
-          name: profile.name,
-          profilePicture: profile.profilePicture
-        });
-      } catch (error) {
-        console.error('Error fetching user profile:', error);
-      }
-    };
-
-    fetchProfile();
-  }, []);
 
   const toggleMenu = () => {
     setIsMenuOpen(!isMenuOpen);
@@ -35,12 +18,18 @@ const Navigation: React.FC<NavigationProps> = ({ currentPath }) => {
     setIsProfileMenuOpen(!isProfileMenuOpen);
   };
 
-  const navLinks = [
-    { name: 'Dashboard', path: '/' },
-    { name: 'Profile', path: '/profile' },
-    { name: 'Settings', path: '/settings' },
-    { name: 'Help', path: '/help' }
-  ];
+  // Navigation links - show all links for authenticated users, limited for guests
+  const navLinks = isLoggedIn 
+    ? [
+        { name: 'Dashboard', path: '/' },
+        { name: 'Profile', path: '/profile' },
+        { name: 'Settings', path: '/settings' },
+        { name: 'Help', path: '/help' }
+      ]
+    : [
+        { name: 'Home', path: '/' },
+        { name: 'Help', path: '/help' }
+      ];
 
   const profileLinks = [
     { name: 'Your Profile', path: '/profile' },
@@ -57,6 +46,11 @@ const Navigation: React.FC<NavigationProps> = ({ currentPath }) => {
       return true;
     }
     return false;
+  };
+
+  const handleLogout = () => {
+    logout();
+    // Redirect handled by App.tsx
   };
 
   return (
@@ -100,64 +94,82 @@ const Navigation: React.FC<NavigationProps> = ({ currentPath }) => {
             </div>
           </div>
           <div className="hidden sm:ml-6 sm:flex sm:items-center">
-            {/* User dropdown */}
-            <div className="ml-3 relative">
-              <div>
-                <button
-                  onClick={toggleProfileMenu}
-                  className="max-w-xs bg-white flex items-center text-sm rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  id="user-menu-button"
-                  aria-expanded={isProfileMenuOpen}
-                  aria-haspopup="true"
-                >
-                  <span className="sr-only">Open user menu</span>
-                  {userProfile?.profilePicture ? (
-                    <img
-                      className="h-8 w-8 rounded-full"
-                      src={userProfile.profilePicture}
-                      alt={`${userProfile.name}'s profile`}
-                    />
-                  ) : (
-                    <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
-                      <span className="text-blue-800 font-medium">
-                        {userProfile?.name.charAt(0) || 'U'}
-                      </span>
-                    </div>
-                  )}
-                </button>
-              </div>
-
-              {isProfileMenuOpen && (
-                <div
-                  className="origin-top-right absolute right-0 mt-2 w-48 rounded-md shadow-lg py-1 bg-white ring-1 ring-black ring-opacity-5 focus:outline-none"
-                  role="menu"
-                  aria-orientation="vertical"
-                  aria-labelledby="user-menu-button"
-                  tabIndex={-1}
-                >
-                  {profileLinks.map((link, index) => (
-                    <a
-                      key={link.path}
-                      href={link.path}
-                      className={`block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 ${
-                        index === profileLinks.length - 1 ? 'border-t border-gray-100' : ''
-                      }`}
-                      role="menuitem"
-                      tabIndex={-1}
-                      onClick={() => {
-                        setIsProfileMenuOpen(false);
-                        if (link.path === '/logout') {
-                          // Handle logout in a real app
-                          console.log('Logging out...');
-                        }
-                      }}
-                    >
-                      {link.name}
-                    </a>
-                  ))}
+            {isLoggedIn ? (
+              /* User dropdown when authenticated */
+              <div className="ml-3 relative">
+                <div>
+                  <button
+                    onClick={toggleProfileMenu}
+                    className="max-w-xs bg-white flex items-center text-sm rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                    id="user-menu-button"
+                    aria-expanded={isProfileMenuOpen}
+                    aria-haspopup="true"
+                  >
+                    <span className="sr-only">Open user menu</span>
+                    {user?.profilePicture ? (
+                      <img
+                        className="h-8 w-8 rounded-full"
+                        src={user.profilePicture}
+                        alt={`${user.name}'s profile`}
+                      />
+                    ) : (
+                      <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
+                        <span className="text-blue-800 font-medium">
+                          {user?.name.charAt(0) || 'U'}
+                        </span>
+                      </div>
+                    )}
+                  </button>
                 </div>
-              )}
-            </div>
+
+                {isProfileMenuOpen && (
+                  <div
+                    className="origin-top-right absolute right-0 mt-2 w-48 rounded-md shadow-lg py-1 bg-white ring-1 ring-black ring-opacity-5 focus:outline-none"
+                    role="menu"
+                    aria-orientation="vertical"
+                    aria-labelledby="user-menu-button"
+                    tabIndex={-1}
+                  >
+                    {profileLinks.map((link, index) => (
+                      <a
+                        key={link.path}
+                        href={link.path}
+                        className={`block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 ${
+                          index === profileLinks.length - 1 ? 'border-t border-gray-100' : ''
+                        }`}
+                        role="menuitem"
+                        tabIndex={-1}
+                        onClick={(e) => {
+                          if (link.path === '/logout') {
+                            e.preventDefault();
+                            handleLogout();
+                          }
+                          setIsProfileMenuOpen(false);
+                        }}
+                      >
+                        {link.name}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Login/Register buttons when not authenticated */
+              <div className="flex space-x-4">
+                <a 
+                  href="/login" 
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-blue-700 bg-blue-50 hover:bg-blue-100"
+                >
+                  Log in
+                </a>
+                <a 
+                  href="/register" 
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+                >
+                  Register
+                </a>
+              </div>
+            )}
           </div>
           <div className="-mr-2 flex items-center sm:hidden">
             {/* Mobile menu button */}
@@ -213,50 +225,75 @@ const Navigation: React.FC<NavigationProps> = ({ currentPath }) => {
               </a>
             ))}
           </div>
-          <div className="pt-4 pb-3 border-t border-gray-200">
-            <div className="flex items-center px-4">
-              <div className="flex-shrink-0">
-                {userProfile?.profilePicture ? (
-                  <img
-                    className="h-10 w-10 rounded-full"
-                    src={userProfile.profilePicture}
-                    alt={`${userProfile.name}'s profile`}
-                  />
-                ) : (
-                  <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                    <span className="text-blue-800 font-medium">
-                      {userProfile?.name.charAt(0) || 'U'}
-                    </span>
-                  </div>
-                )}
+          
+          {/* Show user profile in mobile menu only if logged in */}
+          {isLoggedIn ? (
+            <div className="pt-4 pb-3 border-t border-gray-200">
+              <div className="flex items-center px-4">
+                <div className="flex-shrink-0">
+                  {user?.profilePicture ? (
+                    <img
+                      className="h-10 w-10 rounded-full"
+                      src={user.profilePicture}
+                      alt={`${user.name}'s profile`}
+                    />
+                  ) : (
+                    <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
+                      <span className="text-blue-800 font-medium">
+                        {user?.name.charAt(0) || 'U'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="ml-3">
+                  <div className="text-base font-medium text-gray-800">{user?.name || 'User'}</div>
+                  {user?.email && (
+                    <div className="text-sm font-medium text-gray-500">{user.email}</div>
+                  )}
+                </div>
               </div>
-              <div className="ml-3">
-                <div className="text-base font-medium text-gray-800">{userProfile?.name || 'User'}</div>
+              <div className="mt-3 space-y-1">
+                {profileLinks.map((link) => (
+                  <a
+                    key={link.path}
+                    href={link.path}
+                    className="block px-4 py-2 text-base font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-100"
+                    onClick={(e) => {
+                      if (link.path === '/logout') {
+                        e.preventDefault();
+                        handleLogout();
+                      }
+                      setIsMenuOpen(false);
+                    }}
+                  >
+                    {link.name}
+                  </a>
+                ))}
               </div>
             </div>
-            <div className="mt-3 space-y-1">
-              {profileLinks.map((link) => (
-                <a
-                  key={link.path}
-                  href={link.path}
-                  className="block px-4 py-2 text-base font-medium text-gray-500 hover:text-gray-800 hover:bg-gray-100"
-                  onClick={() => {
-                    setIsMenuOpen(false);
-                    if (link.path === '/logout') {
-                      // Handle logout in a real app
-                      console.log('Logging out...');
-                    }
-                  }}
+          ) : (
+            /* Login/Register buttons for mobile when not authenticated */
+            <div className="pt-4 pb-3 border-t border-gray-200">
+              <div className="space-y-1 px-4">
+                <a 
+                  href="/login" 
+                  className="block text-base font-medium text-blue-600 hover:text-blue-800 hover:bg-gray-100 py-2"
                 >
-                  {link.name}
+                  Log in
                 </a>
-              ))}
+                <a 
+                  href="/register" 
+                  className="block text-base font-medium text-blue-600 hover:text-blue-800 hover:bg-gray-100 py-2"
+                >
+                  Register
+                </a>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </nav>
   );
 };
 
-export default Navigation; 
+export default Navigation;
